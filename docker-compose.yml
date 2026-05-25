@@ -1,0 +1,93 @@
+name: anykb
+
+services:
+  # ===== App DB (PostgreSQL — commercial-grade, multi-worker safe) =====
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: anykb
+      POSTGRES_USER: anykb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anykb -d anykb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ===== Backend (FastAPI + LangGraph + Milvus Lite embedded) =====
+  # Milvus Lite is pure-Python and lives inside the backend process. Its .db
+  # file is persisted in the backend-data volume. To switch to Milvus Standalone
+  # later, add a `milvus` service and set MILVUS_URI=http://milvus:19530.
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # --- App DB ---
+      DATABASE_URL: postgresql+asyncpg://anykb:${POSTGRES_PASSWORD}@postgres:5432/anykb
+
+      # --- Vector store (Milvus Lite embedded) ---
+      VECTOR_STORE: milvus
+      MILVUS_URI: /app/data/milvus_local.db
+      MILVUS_TOKEN: ""
+
+      # --- Auth + encryption ---
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      BYOK_REQUIRED: ${BYOK_REQUIRED:-true}
+
+      # --- Optional fallback LLM/embedding keys (users override in /settings) ---
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-openai}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+
+      # --- Server ---
+      APP_ENV: prod
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: ${PUBLIC_URL:-http://localhost}
+      RATE_LIMIT_PER_HOUR: ${RATE_LIMIT_PER_HOUR:-60}
+    volumes:
+      - backend-data:/app/data
+    expose:
+      - "8000"
+
+  # ===== Frontend (Next.js 14 standalone build) =====
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_APP_NAME: AnyKB
+      NEXT_TELEMETRY_DISABLED: "1"
+    expose:
+      - "3000"
+
+  # ===== Reverse proxy (single public entrypoint, HTTPS) =====
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/anykb.conf:/etc/nginx/conf.d/default.conf:ro
+      # Let's Encrypt certificates (managed by host certbot, mounted read-only).
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # ACME http-01 challenge webroot — kept for future webroot-based renewal.
+      - certbot-www:/var/www/certbot
+
+volumes:
+  postgres-data:
+  backend-data:
+  certbot-www:

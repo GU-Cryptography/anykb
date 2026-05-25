@@ -1,0 +1,5 @@
+{
+  "buildCommand": "pnpm build",
+  "framework": "nextjs",
+  "regions": ["hkg1"]
+}

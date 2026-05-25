@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+out/
+.vercel
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+.workflow/.brainstorm/*/research.json
+qdrant_storage/
+
+# Local data / logs / uploads / vector store files
+data/
+logs/
+backups/
+*.db
+*.db-journal
+
+# Internal docs (not for public repo)
+docs/
+PROGRESS.md

@@ -1,0 +1,212 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   Color tokens (Light) — RGB triples for Tailwind <alpha-value>
+   ============================================================ */
+:root {
+  /* Foreground / background base */
+  --bg: 255 255 255;
+  --fg: 23 23 23;
+  --muted: 115 115 115;
+  --accent: 16 185 129;        /* emerald-500 */
+
+  /* Surfaces (elevation) */
+  --surface: 250 250 252;
+  --surface-2: 244 244 248;
+
+  /* Borders */
+  --border: 228 228 234;
+  --border-strong: 209 209 218;
+
+  /* Status */
+  --success: 22 163 74;        /* green-600 */
+  --warning: 217 119 6;        /* amber-600 */
+  --danger: 220 38 38;         /* red-600 */
+  --info: 37 99 235;           /* blue-600 */
+}
+
+/* ============================================================
+   Color tokens (Dark) — applied when <html class="dark">
+   ============================================================ */
+.dark {
+  --bg: 16 16 18;
+  --fg: 240 240 245;
+  --muted: 145 145 155;
+  --accent: 16 185 129;
+
+  --surface: 24 24 28;
+  --surface-2: 32 32 38;
+
+  --border: 50 50 58;
+  --border-strong: 75 75 85;
+
+  --success: 34 197 94;
+  --warning: 251 146 60;
+  --danger: 248 113 113;
+  --info: 96 165 250;
+}
+
+html,
+body {
+  font-size: 15px;
+  -webkit-text-size-adjust: 100%;
+  background: rgb(var(--bg));
+  color: rgb(var(--fg));
+}
+
+/* Prevent flash of wrong theme during initial mount (ThemeProvider sets html.dark before paint) */
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--fg) / 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--fg) / 0.3);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============================================================
+   Utility primitives — composable across components
+   ============================================================ */
+@layer components {
+  /* Buttons ------------------------------------------------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg
+           border px-3 py-1.5 text-sm font-medium
+           transition disabled:opacity-50 disabled:cursor-not-allowed
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-accent/40;
+  }
+  .btn-primary {
+    @apply bg-accent text-white border-transparent hover:bg-accent/90 shadow-sm;
+  }
+  .btn-ghost {
+    @apply bg-transparent hover:bg-surface;
+  }
+  .btn-danger {
+    @apply text-danger border-danger/30 bg-transparent hover:bg-danger/10;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-xs gap-1;
+  }
+  .btn-icon {
+    @apply h-8 w-8 p-0 gap-0;
+  }
+
+  /* Cards --------------------------------------------------- */
+  .card {
+    @apply rounded-2xl border bg-surface;
+  }
+  .card-hover {
+    @apply transition hover:bg-surface-2 hover:shadow-md;
+  }
+
+  /* Chips / Pills ------------------------------------------- */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full
+           border bg-surface px-2 py-0.5 text-xs;
+  }
+
+  /* Input shell --------------------------------------------- */
+  .input-shell {
+    @apply rounded-lg border bg-bg
+           focus-within:border-accent focus-within:ring-2
+           focus-within:ring-accent/20 transition;
+  }
+}
+
+/* ============================================================
+   Markdown styling inside reports (prose-tg)
+   ============================================================ */
+.prose-tg :first-child {
+  margin-top: 0;
+}
+.prose-tg h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-top: 1.4rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid rgb(var(--border));
+}
+.prose-tg h3 {
+  font-size: 1.02rem;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.25rem;
+  color: rgb(var(--accent));
+}
+.prose-tg p,
+.prose-tg li {
+  line-height: 1.75;
+  margin: 0.35rem 0;
+}
+.prose-tg ul {
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+.prose-tg ol {
+  padding-left: 1.5rem;
+  list-style: decimal;
+}
+.prose-tg hr {
+  margin: 1.25rem 0;
+  border-color: rgb(var(--border));
+}
+.prose-tg code {
+  background: rgb(var(--fg) / 0.08);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+}
+.prose-tg pre {
+  background: rgb(var(--fg) / 0.05);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.prose-tg pre code {
+  background: transparent;
+  padding: 0;
+}
+.prose-tg blockquote {
+  border-left: 3px solid rgb(var(--accent) / 0.6);
+  padding-left: 1rem;
+  color: rgb(var(--muted));
+  margin: 0.75rem 0;
+}
+.prose-tg a {
+  color: rgb(var(--accent));
+  text-decoration: underline;
+}
+.prose-tg table {
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.prose-tg th,
+.prose-tg td {
+  border: 1px solid rgb(var(--border-strong));
+  padding: 0.4rem 0.6rem;
+}
+.prose-tg th {
+  background: rgb(var(--fg) / 0.05);
+  font-weight: 600;
+}

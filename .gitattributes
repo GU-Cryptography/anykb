@@ -1,0 +1,18 @@
+# Cross-platform line endings — Windows dev + Linux deploy without CRLF surprises.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF (cmd.exe stumbles on LF in some edge cases)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets — never normalize
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.docx binary
+*.zip binary
+*.exe binary

@@ -1,0 +1,16 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# never bake secrets or local data into the image
+.env
+.env.*
+data/
+tests/
+*.log
+*.md
