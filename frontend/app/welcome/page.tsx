@@ -49,7 +49,7 @@ export default function WelcomePage() {
               使用场景
             </a>
             <a
-              href="https://github.com"
+              href="https://github.com/GU-Cryptography/anykb"
               target="_blank"
               rel="noreferrer"
               className="transition hover:text-fg"
@@ -327,7 +327,7 @@ export default function WelcomePage() {
             </div>
             <div className="flex items-center gap-5 text-sm text-muted">
               <a
-                href="https://github.com"
+                href="https://github.com/GU-Cryptography/anykb"
                 target="_blank"
                 rel="noreferrer"
                 className="transition hover:text-fg"
