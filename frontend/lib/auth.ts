@@ -15,6 +15,10 @@ export type User = {
   email: string;
   display_name: string;
   created_at: string | null;
+  /** Admin dashboard (06-01): optional so older cached user objects (pre-admin)
+   *  still type-check. Source of truth is /api/auth/me → to_public_dict(). */
+  is_admin?: boolean;
+  is_active?: boolean;
 };
 
 export function getToken(): string | null {
@@ -106,6 +110,18 @@ export async function register(
 
 export function logout(): void {
   clearAuth();
+}
+
+/** Re-fetch the current user from /api/auth/me and refresh the localStorage
+ *  cache. Used by admin pages to pick up an is_admin flag that was granted
+ *  after the cached login. Returns null when not authenticated / on error. */
+export async function refreshMe(): Promise<User | null> {
+  if (!getToken()) return null;
+  const r = await authFetch("/api/auth/me");
+  if (!r.ok) return null;
+  const user = (await r.json()) as User;
+  setUser(user);
+  return user;
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 > 上传文档 / 抓取网页 → 选中 KB → 用一句话问出来。
 > 30 秒内吐一份带原文引用的 markdown 报告，全过程思考链可视。
 
-**版本**：v3.1.0（2026-05-25 / Docker + HTTPS）· **线上**：https://anykb.cc.cd · **协议**：MIT
+**版本**：v3.2-admin（2026-06-02 / 后台管理系统）· v3.1.0（2026-05-25 / Docker + HTTPS）· **线上**：https://anykb.cc.cd · **协议**：MIT
 
 ---
 
@@ -40,6 +40,7 @@
 | **透明 Agent** | 前端实时展示思考链（每步工具调用 / 耗时 / 命中数），不再是黑盒 |
 | **流式输出** | SSE 推 token，"正在思考 → 工具跑 → 正在撰写报告" 三段过渡 |
 | **BYOK 强制 gate** | `BYOK_REQUIRED=true` 公网部署模式，禁止白嫖 owner 的 API key |
+| **后台管理** | `/admin` 管理员后台：统计看板 + 用户管理（封禁 / 设管理员 / 重置密码 / 删除）+ 跨用户 KB 管理；`ADMIN_EMAILS` 指定管理员，仅元数据不看正文 |
 | **Docker 化部署** | 4 容器 compose（postgres + backend + frontend + nginx），`./scripts/deploy.sh` 一行起 |
 | **完全解耦** | LLM / embedding / 向量库 / App DB 全部 env 驱动或在 `/settings` 改，代码零改动 |
 
@@ -103,10 +104,10 @@ ai-agent/
 │   │   ├── app.py                 FastAPI 入口 + SSE chat 端点 + lifespan
 │   │   ├── settings.py            pydantic-settings（.env 驱动）
 │   │   ├── auth/                  M1: JWT 认证（注册 / 登录 / me / 改密 / 删号）
-│   │   │   ├── models.py          User SQLAlchemy 模型（15 列：4 主 + 5 LLM + 5 embed + 1 reranker_enabled）
+│   │   │   ├── models.py          User SQLAlchemy 模型（17 列：4 主 + 5 LLM + 5 embed + 1 reranker_enabled + 2 平台标志 is_admin/is_active）
 │   │   │   ├── password.py        bcrypt cost=12
 │   │   │   ├── tokens.py          JWT HS256 编解码
-│   │   │   ├── middleware.py      CurrentUser FastAPI 依赖
+│   │   │   ├── middleware.py      CurrentUser + require_admin/AdminUser 依赖（封禁拦截下沉于此）
 │   │   │   └── routes.py          /api/auth/{register,login,me,change-password}
 │   │   ├── kb/                    M2/M3: 知识库 + 文档 + ingest
 │   │   │   ├── models.py          KB / Document / KBMember / KBInvitation
@@ -154,7 +155,7 @@ ai-agent/
 │   │   ├── app.db                 SQLite 应用库
 │   │   ├── milvus_local.db        Milvus Lite 向量库
 │   │   └── uploads/{kb_id}/       原始上传文件
-│   ├── tests/                     11 个 smoke (test_reranker_smoke + test_milvus_smoke)
+│   ├── tests/                     smoke (reranker + milvus + graph) + test_admin (28) + conftest（临时 DB/HTTP 夹具）
 │   ├── env.example                env 模板（每个字段含注释）
 │   └── pyproject.toml             依赖（核心 + dev/ollama/openai/monitoring/milvus extras）
 │
@@ -227,7 +228,8 @@ ai-agent/
 
 | 模块 | 职责 | 关键文件 |
 |---|---|---|
-| `auth/` | 本地账户、JWT 签发、密码哈希、CurrentUser 依赖 | `routes.py`, `middleware.py` |
+| `auth/` | 本地账户、JWT 签发、密码哈希、CurrentUser/require_admin 依赖、ADMIN_EMAILS 启动 seed | `routes.py`, `middleware.py`, `admin_seed.py` |
+| `admin/` | **v3.2** 后台管理 API：stats / 用户管理 / 跨用户 KB 管理 + 自我保护不变量（全 `AdminUser` 守卫，仅元数据） | `routes.py` |
 | `kb/` | 知识库 / 文档 CRUD、4 种格式解析、后台 ingest、协作邀请 | `routes.py`, `ingest.py`, `parsers/` |
 | `conversations/` | 跨设备会话历史，含 bulk import + JSON export | `routes.py`, `models.py` |
 | `settings_user/` | 每用户自助配 LLM / Embedding / Reranker，含 probe + Fernet 加密 | `routes.py`, `probe.py` |
@@ -244,6 +246,7 @@ ai-agent/
 | `app/page.tsx` | 主聊天页（含 KB selector + Model selector + Sidebar） |
 | `app/kbs/` | KB 列表 / 详情 / 成员管理 / 邀请 Dialog |
 | `app/settings/` | LLM 凭据卡 + KB 选项（v3-M8 精简后） |
+| `app/admin/` | **v3.2** 后台管理三页（看板 / 用户 / KB）+ `AdminShell` 客户端守卫；普通用户 Sidebar 无入口 |
 | `components/SystemSettingsDialog.tsx` | DeepSeek 风 4-tab 系统设置 modal（通用 / 账号 / 数据 / 关于） |
 | `components/CreateKbDialog.tsx` | 含 embedding + reranker 配置 + 强制"测试连接"才能保存 |
 | `components/ThinkingChain.tsx` | 工具调用链实时可视化（运行中跳秒） |
@@ -286,7 +289,9 @@ ai-agent/
 DATABASE_URL=postgresql+asyncpg://anykb:strong_password@postgres:5432/anykb
 ```
 
-所有表定义（User / KB / Document / Conversation / Message / KBMember / KBInvitation）都是 SQLAlchemy 2.x Mapped 风格，跨 dialect 通用。**注意**：`_migrate_additive_columns` 的 ALTER 是 SQLite 语法；PostgreSQL 上首次 `create_all` 一次建全所有最新列，老 ALTER 走不到 if 分支，不会报错。
+所有表定义（User / KB / Document / Conversation / Message / KBMember / KBInvitation）都是 SQLAlchemy 2.x Mapped 风格，跨 dialect 通用。**加列迁移**：`_migrate_additive_columns` 在每次启动 `create_all` 之后跑，缺列才 `ALTER TABLE ADD COLUMN`，幂等。
+
+> ⚠️ **新布尔列必须用 portable 字面量 `DEFAULT FALSE/TRUE`**（不是 `0/1`）。往**已存在的生产表**追加布尔列时（如 v3.2 的 `users.is_admin/is_active`），ALTER 会**真的在 Postgres 执行**，整数 `DEFAULT 0/1` 会触发 `boolean ≠ integer` 报错；`FALSE/TRUE` 在 Postgres 原生、SQLite ≥3.23 也支持，两方言通吃。早期那些 `DEFAULT 0/1` 的布尔列只在 SQLite 验证过——生产 Postgres 当年是 `create_all` 一次性建表，那些 ALTER 分支从没在 PG 上真正跑过；v3.2 是第一次在生产 Postgres 上真正执行加列 ALTER，已验证通过。
 
 #### Milvus Standalone（向量 DB 升级，未做）
 
@@ -373,7 +378,7 @@ postgres        backend         frontend
 | `backend/Dockerfile` | Python 3.11 slim + `pip install .[milvus] asyncpg` + healthcheck `/health` |
 | `frontend/Dockerfile` | 两阶段 build：builder npm ci + build / runner 只装 `.next/standalone`（~150MB） |
 | `nginx/anykb.conf` | upstream `backend:8000` + `frontend:3000` + SSE-safe 配置 |
-| `env.docker.example` | 模板：POSTGRES_PASSWORD / JWT_SECRET / PUBLIC_URL / BYOK_REQUIRED |
+| `env.docker.example` | 模板：POSTGRES_PASSWORD / JWT_SECRET / PUBLIC_URL / BYOK_REQUIRED / ADMIN_EMAILS |
 | `scripts/deploy.sh` | build + up + healthcheck + 日志（**主入口**） |
 | `scripts/backup.sh` | 备份 PG + backend-data volume 到 tarball |
 | `scripts/logs.sh` | tail -f 指定服务日志 |
@@ -587,6 +592,37 @@ cd ~/anykb && ./scripts/deploy.sh backend
 3. **多 worker** — `backend` Dockerfile CMD 加 `--workers 4`（PG 已经能支持，不再有 SQLite 写冲突）
 4. **Milvus Standalone** — 数据上百万级再考虑（见 §5 切换步骤）
 
+### 启用后台管理（Admin Dashboard）
+
+`/admin` 后台只对管理员开放。**第一个管理员通过 env 引导，之后可在后台互相增减**（env 仅作启动兜底，不是唯一来源）。
+
+**首次开通（bootstrap）：**
+
+```bash
+# 1) 先在网站正常注册一个账号（管理员本身也是普通用户，env 只提升“已注册”的账号）
+
+# 2) 在根 .env（Docker）或 backend/.env（本地）加白名单，多个逗号分隔：
+ADMIN_EMAILS=you@example.com,ops@example.com
+
+# 3) 重新部署 / 重启 backend，启动时自动 seed：
+./scripts/deploy.sh
+#    backend 日志出现  admins_seeded ... promoted=N  即生效
+```
+
+完成后该账号登录 → 左下角用户菜单出现 **「后台管理」** 入口 → 进 `/admin`（普通用户看不到入口，直接访问 `/admin` 会被弹回首页，服务端 403 为最终防线）。
+
+**三个页面能做什么（只读元数据 / 计数，绝不暴露会话正文或 KB 文本）：**
+
+| 页 | 能力 |
+|---|---|
+| 看板 | 用户总数 / 活跃 / 封禁 / 管理员 / 近 7 天新增 + KB（含 system）/ 文档 / 会话 / 消息 计数 |
+| 用户 | 列表（分页，每行 KB/会话计数 + 是否配过 LLM）+ 封禁·解封 / 设·取消管理员 / 重置密码 / 删除（连带清其 KB/会话） |
+| 知识库 | 跨用户列出所有 KB（含 owner 邮箱）+ 删除（system KB 禁删，含向量 collection 清理） |
+
+**安全不变量（服务端强制，违反返 400/409）：** 不能封禁/降级/删除**自己**；不能动掉**最后一个活跃管理员**；**system KB 不可删**。被封账号（`is_active=false`）无法登录、所有受保护接口返回 403。每个写操作落一行 structlog `admin_action`（actor / action / target）审计。
+
+> **平台标志列** `users.is_admin`（默认 false）/ `is_active`（默认 true）由启动迁移自动补到现有库，旧用户默认“普通且启用”，无人受影响（布尔列用 portable `DEFAULT FALSE/TRUE`，见 §5）。
+
 ### HTTPS 部署细节（已生效）
 
 域名 `anykb.cc.cd` → Let's Encrypt 免费证书：
@@ -633,6 +669,7 @@ sudo certbot renew
 | **App DB** | `DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db`（本地）/ `postgresql+asyncpg://...`（Docker） | Docker compose 自动注入 |
 | **Auth** | `JWT_SECRET` | (必填) | 32 字节随机十六进制 |
 | | `JWT_EXPIRE_MINUTES` | `10080` | 7 天 |
+| **后台管理** | `ADMIN_EMAILS` | (空) | 逗号分隔邮箱，启动时 seed 为管理员（账号须先注册）；运行时也可由现有管理员在 `/admin` 增减 |
 | **BYOK gate** | `BYOK_REQUIRED` | `false` | **公网部署必设 true** |
 | **加密** | (派生自 `JWT_SECRET`) | — | Fernet at-rest 加密所有 api_key |
 | **CORS** | `CORS_ORIGINS` | `http://localhost:3000` | 多个用逗号分隔 |

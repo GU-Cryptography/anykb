@@ -14,6 +14,7 @@ import {
   Sparkles,
   ChevronUp,
   LogOut,
+  Shield,
 } from "lucide-react";
 import Brand from "@/components/Brand";
 import SystemSettingsDialog from "@/components/SystemSettingsDialog";
@@ -279,6 +280,16 @@ function UserMenu({
             <BookOpen className="h-4 w-4 opacity-70" />
             我的知识库
           </Link>
+          {user.is_admin && (
+            <Link
+              href="/admin"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 px-3 py-2 text-sm text-fg/90 transition hover:bg-surface-2"
+            >
+              <Shield className="h-4 w-4 opacity-70" />
+              后台管理
+            </Link>
+          )}
           <div className="border-t" />
           <button
             onClick={() => {

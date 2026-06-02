@@ -60,10 +60,24 @@ class User(Base):
         Boolean, nullable=False, default=False, server_default="0"
     )
 
+    # 06-01 admin-dashboard: platform-level role + active flag.
+    # - is_admin gates /api/admin/* (see auth.middleware.require_admin) and is
+    #   seeded from settings.admin_emails on startup; togglable at runtime.
+    # - is_active False = banned: current_user + login reject the user
+    #   everywhere. Defaults keep every existing/new account a normal, active user.
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
+
     def to_public_dict(self) -> dict:
         return {
             "id": self.id,
             "email": self.email,
             "display_name": self.display_name or self.email.split("@")[0],
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "is_admin": self.is_admin,
+            "is_active": self.is_active,
         }

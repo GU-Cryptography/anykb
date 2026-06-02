@@ -42,7 +42,7 @@ from src.auth.middleware import CurrentUser
 from src.auth.models import User
 from src.infra.database import get_session
 from src.infra.embedding import _resolve_config, get_vector_size, probe_vector_size
-from src.infra.vector_store import QdrantStore, get_store
+from src.infra.vector_store import get_store
 from src.kb.ingest import (
     delete_document_chunks,
     delete_kb_uploads,
@@ -396,6 +396,30 @@ async def get_kb(
     }
 
 
+async def purge_kb(session: AsyncSession, kb: KB) -> None:
+    """Drop a KB's vector collection, delete its row (cascades documents /
+    members / invitations) and remove uploaded files from disk.
+
+    Shared by the owner delete route (DELETE /api/kbs/{id}) and the admin
+    delete endpoint (DELETE /api/admin/kbs/{id}); callers authorize first.
+    """
+    collection_name = kb.collection_name
+    kb_id = kb.id
+
+    # Drop the vector collection first — it's idempotent so leaks here are
+    # recoverable, but a dangling DB row pointing at a missing collection would
+    # 500 on search.
+    store = get_store()
+    if hasattr(store, "delete_collection"):
+        await store.delete_collection(collection_name)
+
+    await session.delete(kb)  # cascade deletes Document / member / invitation rows
+    await session.commit()
+
+    # Clean up uploaded files on disk.
+    delete_kb_uploads(kb_id)
+
+
 @router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_kb(
     kb_id: str,
@@ -403,19 +427,7 @@ async def delete_kb(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     kb = await _load_owner_kb(session, kb_id, user.id)
-    collection_name = kb.collection_name
-
-    # Drop Qdrant collection first — it's idempotent so leaks here are recoverable,
-    # but a dangling DB row pointing at a missing collection would 500 on search.
-    store = get_store()
-    if hasattr(store, "delete_collection"):
-        await store.delete_collection(collection_name)
-
-    await session.delete(kb)  # cascade deletes Document rows
-    await session.commit()
-
-    # Clean up uploaded files on disk.
-    delete_kb_uploads(kb_id)
+    await purge_kb(session, kb)
 
 
 # ---------------------------------------------------------------------------

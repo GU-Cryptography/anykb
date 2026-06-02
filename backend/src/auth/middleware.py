@@ -68,7 +68,33 @@ async def current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="user no longer exists",
         )
+    # 06-01 admin-dashboard: banned accounts (is_active False) are rejected at
+    # every protected entry point. Existing rows predate the column; the additive
+    # migration backfills is_active=TRUE so current users are unaffected.
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account disabled",
+        )
     return user
 
 
 CurrentUser = Annotated[User, Depends(current_user)]
+
+
+async def require_admin(user: CurrentUser) -> User:
+    """FastAPI dependency: 403 unless the caller is a platform admin.
+
+    Composes on top of current_user — an unauthenticated caller already gets
+    401, and a banned admin (is_active False) is rejected upstream before this
+    is_admin check runs.
+    """
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin only",
+        )
+    return user
+
+
+AdminUser = Annotated[User, Depends(require_admin)]

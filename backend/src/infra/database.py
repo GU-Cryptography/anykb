@@ -170,6 +170,25 @@ def _migrate_additive_columns(sync_conn) -> None:
                 )
             )
 
+        # 06-01 admin-dashboard: users.is_admin + users.is_active.
+        # IMPORTANT — use DEFAULT FALSE / TRUE, NOT 0 / 1. Production runs
+        # PostgreSQL (docker-compose: postgresql+asyncpg), whose BOOLEAN columns
+        # reject an integer default ("column is boolean but default is integer").
+        # The older `DEFAULT 0` ALTERs above only ever ran against SQLite dev DBs
+        # — on prod those columns were born via create_all, so their ALTER branch
+        # never executed on Postgres. These two are added to an ALREADY-EXISTING
+        # prod users table, so their ALTER WILL run on Postgres and the DDL must
+        # be portable. FALSE/TRUE work on both PostgreSQL and SQLite >= 3.23
+        # (the SQLite bundled with supported Python is far newer).
+        if "is_admin" not in cols:
+            sync_conn.execute(
+                text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE")
+            )
+        if "is_active" not in cols:
+            sync_conn.execute(
+                text("ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE")
+            )
+
     # v3-M6: conversations.llm_model (nullable VARCHAR) — per-conversation
     # LLM model override; NULL means fall back to the user's default model.
     if "conversations" in tables:

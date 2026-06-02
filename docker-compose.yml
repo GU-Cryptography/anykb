@@ -39,6 +39,9 @@ services:
       # --- Auth + encryption ---
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       BYOK_REQUIRED: ${BYOK_REQUIRED:-true}
+      # Comma-separated emails promoted to platform admin on startup (06-01).
+      # The account must be registered first; then it gains /admin access.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
 
       # --- Optional fallback LLM/embedding keys (users override in /settings) ---
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

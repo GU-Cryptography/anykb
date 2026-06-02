@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
     auth_enabled: bool = True  # set False to skip auth (dev/demo)
 
+    # Admin allowlist (06-01 admin-dashboard): comma-separated emails promoted to
+    # is_admin=True on startup (seed_admins). Lets the operator bootstrap the
+    # first admin without a manual DB edit — add the email and restart. Only
+    # marks already-registered users; unknown emails are re-checked next boot.
+    admin_emails: str = ""
+
     # ===== BYOK gate (v2-M2, 2026-05-15) =====
     # When True, every user MUST configure their own LLM (and embedding for KB
     # operations) in /settings before chat / create_kb / upload work. Default

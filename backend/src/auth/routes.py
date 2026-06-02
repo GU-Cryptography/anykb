@@ -69,6 +69,11 @@ async def login(req: LoginRequest, session: AsyncSession = Depends(get_session))
         # Same error for "no such user" vs "wrong password" to avoid enumeration.
         raise HTTPException(status_code=401, detail="invalid email or password")
 
+    # 06-01 admin-dashboard: banned accounts can authenticate-by-password but
+    # must not receive a token. Distinct 403 so the UI can show a clear message.
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="account disabled")
+
     token = issue_token(user.id, user.email)
     return AuthResponse(token=token, user=user.to_public_dict())
 
@@ -121,28 +126,37 @@ async def change_password(
     return {"ok": True}
 
 
+async def purge_user(session: AsyncSession, user: User) -> None:
+    """Hard-delete a user plus the KBs and conversations they own.
+
+    KB.user_id / Conversation.user_id are soft FKs (no DB-level cascade), so we
+    clear them explicitly. Shared by the self-delete route (DELETE /me) and the
+    admin delete-user endpoint; callers handle authorization + invariants first.
+
+    NOTE: per-KB vector collections are not dropped here (bulk path, mirrors the
+    original self-delete behavior). Single-KB deletion via kb.routes.purge_kb is
+    what drops vector collections.
+    """
+    from sqlalchemy import delete
+
+    from src.conversations.models import Conversation
+    from src.kb.models import KB
+
+    await session.execute(delete(Conversation).where(Conversation.user_id == user.id))
+    await session.execute(delete(KB).where(KB.user_id == user.id))
+    await session.delete(user)
+    await session.commit()
+
+
 @router.delete("/me")
 async def delete_me(
     user: CurrentUser,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Hard-delete the current user.
-
-    FK CASCADE handles owned KBs (via kb_members.user_id), conversations, etc.
-    Note: KB.user_id is a soft FK; we explicitly clear owned KBs here to keep
-    them from becoming orphaned. (Same for conversations.)
-    """
-    from sqlalchemy import delete
-    from src.kb.models import KB
-    from src.conversations.models import Conversation
-
+    """Hard-delete the current user (plus the KBs / conversations they own)."""
     u = await session.get(User, user.id)
     if u is None:
         raise HTTPException(status_code=404, detail="user not found")
 
-    # Explicit cleanup since user_id is a soft FK on these tables.
-    await session.execute(delete(Conversation).where(Conversation.user_id == user.id))
-    await session.execute(delete(KB).where(KB.user_id == user.id))
-    await session.delete(u)
-    await session.commit()
+    await purge_user(session, u)
     return {"ok": True}

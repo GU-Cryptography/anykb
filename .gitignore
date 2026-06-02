@@ -41,3 +41,13 @@ backups/
 # Internal docs (not for public repo)
 docs/
 PROGRESS.md
+
+# AI assistant / agent tool configs (per-developer, like .claude/)
+.agents/
+.codex/
+.cursor/
+.gemini/
+.kilocode/
+.opencode/
+.trellis/
+AGENTS.md

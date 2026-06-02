@@ -56,6 +56,11 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
 
     await seed_system_kbs()
     log.info("system_kbs_seeded")
+
+    from src.auth.admin_seed import seed_admins
+
+    await seed_admins()
+    log.info("admins_seeded")
     yield
     log.info("shutdown")
 
@@ -102,6 +107,10 @@ app.include_router(conversations_router)
 from src.settings_user.routes import router as settings_router  # noqa: E402
 
 app.include_router(settings_router)
+
+from src.admin.routes import router as admin_router  # noqa: E402
+
+app.include_router(admin_router)
 
 
 @app.get("/health")
