@@ -2,18 +2,27 @@
 
 Skipped when `pymilvus` is not installed (Qdrant-only deployments).
 
-Patches get_settings() directly instead of setting MILVUS_URI env var: pymilvus'
-module-level Config.MILVUS_URI validator chokes on local file paths (expects
-HTTP form). Our production code handles this by popping the env var inside
-MilvusStore.__init__, but tests should not rely on that side effect.
+Two pymilvus quirks are handled at import time:
+  - Its module-level Config.MILVUS_URI validator rejects local file paths (it
+    expects an http[s]:// form), so importing pymilvus while MILVUS_URI points
+    at a Milvus-Lite .db file raises ConnectionConfigException during pytest
+    collection — which importorskip can't catch (it only swallows ImportError).
+    We blank MILVUS_URI before the import, exactly as MilvusStore.__init__ does
+    in production.
+  - Each test injects its own .db via monkeypatch on get_settings rather than
+    the env var, so store isolation never depends on that import-time tweak.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 from pathlib import Path
 
 import pytest
+
+# Neutralize MILVUS_URI before importing pymilvus (see module docstring).
+os.environ["MILVUS_URI"] = ""
 
 pytest.importorskip("pymilvus")
 pytest.importorskip("milvus_lite")
