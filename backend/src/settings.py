@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     # for any public deployment to stop sharing the owner's API keys.
     byok_required: bool = False
 
+    # ===== Context / Memory (M1 memory-optimization) =====
+    memory_window_size: int = 10       # short-term window (rounds), 0 = keep all
+    context_total_budget: int = 8000   # total token budget for LLM context
+
     # ===== Server =====
     app_env: str = "dev"
     log_level: str = "INFO"

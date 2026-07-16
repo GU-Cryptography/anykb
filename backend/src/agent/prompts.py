@@ -1,4 +1,10 @@
 """System prompts for the agent — general / travel (legacy) / KB modes."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.agent.context_builder import Section
 
 # v2-M4 (2026-05-17): unbound state used to fall back to travel mode. Now it
 # routes to this neutral assistant prompt — plain chat with no business tools.
@@ -61,6 +67,70 @@ v1 仅 4 城市本地策展数据: 上海、北京、成都、杭州。
 
 # Legacy alias — earlier code imported this as SYSTEM_PROMPT.
 SYSTEM_PROMPT = SYSTEM_PROMPT_TRAVEL
+
+
+def build_context_sections(
+    system_prompt_text: str,
+    recent_messages: list[dict] | None = None,
+    memory_window_size: int = 10,
+) -> list[Section]:
+    """Build layered context sections for the LLM prompt.
+
+    M1: only L0 (system definition) and L5 (recent messages).
+    L1-L4 are reserved for M2/M3 (user profile, long-term memory,
+    task state, early summary).
+
+    Returns a list of ``Section`` objects suitable for
+    ``context_builder.build_layered_prompt()``.
+
+    Parameters
+    ----------
+    system_prompt_text:
+        Already-resolved system prompt for the current mode
+        (``SYSTEM_PROMPT_GENERAL``, ``SYSTEM_PROMPT_TRAVEL``, or
+        ``build_kb_system_prompt()`` output).
+    recent_messages:
+        Full message list from agent state.  Will be truncated to the
+        last ``memory_window_size * 2`` messages.
+    memory_window_size:
+        Max conversation rounds to retain in L5.  0 = keep all.
+    """
+    from src.agent.context_builder import CONTEXT_BUDGET, Section, window_messages
+
+    sections: list[Section] = []
+
+    # L0: System definition (never truncated).
+    sections.append(
+        Section(
+            layer=0,
+            role="system",
+            content=system_prompt_text,
+            truncatable=False,
+            budget=CONTEXT_BUDGET["system_definition"],
+            section_key="system_definition",
+        )
+    )
+
+    # L5: Recent messages (truncatable).
+    # memory_window_size=0 keeps the full history verbatim (backward-compat
+    # escape hatch, see PRD §11). Otherwise keep ~N rounds (round = user +
+    # assistant), turn-aligned so we never split a tool_use/tool_result pair.
+    msgs = list(recent_messages) if recent_messages else []
+    if memory_window_size > 0:
+        msgs = window_messages(msgs, memory_window_size * 2)
+
+    sections.append(
+        Section(
+            layer=5,
+            role="user",
+            content=msgs,
+            truncatable=True,
+            budget=CONTEXT_BUDGET["recent_messages"],
+            section_key="recent_messages",
+        )
+    )
+
+    return sections
 
 
 def build_kb_system_prompt(

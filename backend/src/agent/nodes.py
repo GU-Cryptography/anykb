@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
-import uuid
 from typing import Any, TYPE_CHECKING
 
 from src.agent.prompts import SYSTEM_PROMPT
@@ -36,7 +34,13 @@ async def plan_node(
     injected by build_graph. KB-mode conversations get a different
     system_prompt + the generic `generate_kb_report` skill (v2-M8); travel
     KB gets `generate_travel_report`. Unbound chat mounts neither.
+
+    v3-M1 (memory-optimization): constructs a layered prompt via
+    ``build_context_sections`` + ``build_layered_prompt`` instead of
+    passing ``system_prompt`` and ``messages`` directly to the LLM.
     """
+    from src.agent.context_builder import build_layered_prompt
+    from src.agent.prompts import build_context_sections
     from src.settings import get_settings
 
     # Early exit if final_report already set (by skill_report from prev tool wave)
@@ -57,21 +61,33 @@ async def plan_node(
     model = pick_model(messages, tools_schema, llm_cfg)
     client = get_client(llm_cfg)
 
+    s = get_settings()
+
+    # Build layered context (M1: L0 system definition + L5 recent messages).
+    sections = build_context_sections(
+        system_prompt_text=system_prompt,
+        recent_messages=messages,
+        memory_window_size=s.memory_window_size,
+    )
+    layered = build_layered_prompt(
+        sections,
+        total_budget=s.context_total_budget,
+    )
+
     # Decide API shape: anthropic vs openai-compat. User cfg wins; env fallback otherwise.
     if llm_cfg is not None:
         is_anthropic = llm_cfg.provider == "anthropic"
     else:
-        is_anthropic = get_settings().llm_provider == "anthropic"
+        is_anthropic = s.llm_provider == "anthropic"
 
     if not is_anthropic:
         # OpenAI-compatible (DeepSeek, OpenAI, vLLM, Together, Groq, LMStudio, etc.)
-        system, openai_messages, openai_tools = convert_to_openai_format(messages, tools_schema)
-        # Override the system block with the per-mode prompt (convert_to_openai_format
-        # doesn't know about KB-mode, it just preserves whatever system text was there).
-        system = system_prompt
+        _, openai_messages, openai_tools = convert_to_openai_format(
+            layered.messages, tools_schema,
+        )
         resp = await client.chat.completions.create(
             model=model,
-            messages=[{"role": "system", "content": system}] + openai_messages,
+            messages=[{"role": "system", "content": layered.system_text}] + openai_messages,
             tools=openai_tools if openai_tools else None,
             max_tokens=2048,
         )
@@ -86,7 +102,6 @@ async def plan_node(
 
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
-                import json
                 tool_calls.append({
                     "id": tc.id,
                     "name": tc.function.name,
@@ -106,12 +121,12 @@ async def plan_node(
             })
     else:
         # Anthropic API
-        system_blocks = with_cache_control([{"type": "text", "text": system_prompt}], llm_cfg)
+        system_blocks = with_cache_control(layered.system_blocks, llm_cfg)
         resp = await client.messages.create(
             model=model,
             max_tokens=2048,
             system=system_blocks,
-            messages=messages,
+            messages=layered.messages,
             tools=tools_schema,
         )
         cost.add(model, resp.usage)
