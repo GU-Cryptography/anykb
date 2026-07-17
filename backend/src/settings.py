@@ -105,6 +105,20 @@ class Settings(BaseSettings):
     memory_window_size: int = 10       # short-term window (rounds), 0 = keep all
     context_total_budget: int = 8000   # total token budget for LLM context
 
+    # ===== Short-term memory (v3-M2 memory-optimization) =====
+    # Master switch for the M2 short-term memory feature. Empty (default) =
+    # feature off: no Redis writes, no compression, no L4 summary injection —
+    # behavior stays exactly at M1. Docker: redis://redis:6379/0.
+    # A configured-but-unreachable Redis degrades per-op to no-op (PG fallback
+    # keeps compression + L4 alive); it never blocks or 500s the chat path.
+    redis_url: str = ""
+    memory_compression_batch: int = 5  # rounds per compression batch (0 = never compress)
+
+    # M3 placeholders (config surface reserved per PRD §9; logic lands in M3 —
+    # long-term memory auto-extraction + retention/decay maintenance).
+    memory_auto_extract: bool = True
+    memory_retention_days: int = 90
+
     # ===== Server =====
     app_env: str = "dev"
     log_level: str = "INFO"

@@ -73,12 +73,15 @@ def build_context_sections(
     system_prompt_text: str,
     recent_messages: list[dict] | None = None,
     memory_window_size: int = 10,
+    early_summary: str = "",
 ) -> list[Section]:
     """Build layered context sections for the LLM prompt.
 
-    M1: only L0 (system definition) and L5 (recent messages).
-    L1-L4 are reserved for M2/M3 (user profile, long-term memory,
-    task state, early summary).
+    M1: L0 (system definition) and L5 (recent messages).
+    v3-M2 adds L4 (early summary): the accumulated compression summary of
+    rounds that slid out of the L5 window. Empty summary (default) produces
+    no L4 section, so all pre-M2 callers keep their exact M1 behavior.
+    L1-L3 are reserved for M3 (user profile, long-term memory, task state).
 
     Returns a list of ``Section`` objects suitable for
     ``context_builder.build_layered_prompt()``.
@@ -94,6 +97,10 @@ def build_context_sections(
         last ``memory_window_size * 2`` messages.
     memory_window_size:
         Max conversation rounds to retain in L5.  0 = keep all.
+    early_summary:
+        Accumulated early-history summary (from short-term memory batch
+        compression, see ``conversations/short_term_memory.py``).  "" = no
+        compressed history → layer omitted.
     """
     from src.agent.context_builder import CONTEXT_BUDGET, Section, window_messages
 
@@ -110,6 +117,25 @@ def build_context_sections(
             section_key="system_definition",
         )
     )
+
+    # L4: Early conversation summary (v3-M2, never truncated). Carries the
+    # key facts from rounds already compressed out of the L5 window.
+    if early_summary and early_summary.strip():
+        sections.append(
+            Section(
+                layer=4,
+                role="system",
+                content=(
+                    "## 早期对话摘要\n"
+                    "以下是本会话较早轮次的压缩摘要（原文已滑出上下文窗口），"
+                    "回答时请把这些背景考虑在内：\n"
+                    f"{early_summary.strip()}"
+                ),
+                truncatable=False,
+                budget=CONTEXT_BUDGET["early_summary"],
+                section_key="early_summary",
+            )
+        )
 
     # L5: Recent messages (truncatable).
     # memory_window_size=0 keeps the full history verbatim (backward-compat

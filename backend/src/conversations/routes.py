@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -286,6 +286,22 @@ async def append_message(
 
     await session.commit()
     await session.refresh(msg)
+
+    # v3-M2 memory-optimization: after archiving to PG, feed the message into
+    # the short-term memory path (Redis hot window + async batch compression).
+    # Fire-and-forget — never blocks the response; no-op when REDIS_URL unset.
+    # Compression reuses the user's per-session LLM (BYOK + per-conversation
+    # model override), matching app._run_chat_session's resolution.
+    from src.conversations.short_term_memory import (
+        resolve_session_llm,
+        schedule_memory_update,
+        short_term_memory_enabled,
+    )
+
+    if short_term_memory_enabled():
+        llm_cfg = resolve_session_llm(user, conv)
+        schedule_memory_update(user.id, conv.id, req.role, req.content or "", llm_cfg)
+
     return msg.to_public_dict()
 
 

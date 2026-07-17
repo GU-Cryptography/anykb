@@ -133,6 +133,12 @@ class ChatRequest(BaseModel):
     # currentConv.llm_model (saved per-conversation in DB) and passes it here.
     # Server applies via dataclasses.replace() — no schema-level dependency.
     model: str | None = Field(default=None, max_length=128)
+    # v3-M2 memory-optimization: optional source conversation id. Lets plan_node
+    # read this conversation's early-summary (L4). Reads are scoped to the
+    # authenticated user (Redis key embeds user_id; PG lookup checks ownership),
+    # so a foreign id yields "" rather than leaking. Old frontends that don't
+    # send it simply get no L4 layer (exact M1 behavior).
+    conversation_id: str | None = Field(default=None, max_length=36)
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +152,7 @@ def _run_chat_session(
     kb: KB | None = None,
     user: User | None = None,
     model_override: str | None = None,
+    conversation_id: str | None = None,
 ) -> EventSourceResponse:
     settings = get_settings()
     allowed, remaining = rate_check(rate_key, settings.rate_limit_per_hour)
@@ -213,6 +220,13 @@ def _run_chat_session(
                 "iterations": 0,
                 "tool_call_log": [],
             }
+            # v3-M2: thread the session identity into agent state so plan_node
+            # can fetch this conversation's early-summary (L4). Only set when
+            # both ids are present — a missing conversation_id (old frontend)
+            # leaves L4 off, preserving M1 behavior.
+            if conversation_id and user is not None:
+                initial_state["conversation_id"] = conversation_id
+                initial_state["user_id"] = user.id
             final_state = await graph.ainvoke(initial_state)
             report = redact_pii(final_state.get("final_report") or "")
             await queue.put({"event": "report_start"})
@@ -294,6 +308,7 @@ async def chat_post(
         kb=kb,
         user=user,
         model_override=req.model,
+        conversation_id=req.conversation_id,
     )
 
 

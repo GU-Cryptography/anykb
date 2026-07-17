@@ -46,6 +46,18 @@ class Conversation(Base):
     # default_model and complex_model to this value.
     llm_model: Mapped[str | None] = mapped_column(String(128), nullable=True, default=None)
 
+    # v3-M2 memory-optimization: short-term memory compression bookkeeping.
+    # compressed_count   — rounds already folded into context_summary.
+    # compression_watermark — last message id compressed (dedup guard / audit).
+    # context_summary    — accumulated early-history summary (L4). PG is the
+    #   durable fallback; Redis Hash meta mirrors it as the hot copy. NULL/0 =
+    #   nothing compressed yet, so plan_node simply omits the L4 layer.
+    compressed_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    compression_watermark: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    context_summary: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False
     )

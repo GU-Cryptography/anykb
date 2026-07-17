@@ -197,3 +197,28 @@ def _migrate_additive_columns(sync_conn) -> None:
             sync_conn.execute(
                 text("ALTER TABLE conversations ADD COLUMN llm_model VARCHAR(128)")
             )
+
+        # v3-M2 memory-optimization: short-term memory compression bookkeeping.
+        # These ALTERs WILL run against the already-existing prod conversations
+        # table (PostgreSQL via asyncpg — see docker-compose), so the DDL must
+        # stay portable across PostgreSQL and SQLite. INTEGER DEFAULT 0 and
+        # nullable VARCHAR/TEXT are safe on both (no boolean-default trap here,
+        # cf. the users.is_admin note above).
+        if "compressed_count" not in conv_cols:
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE conversations ADD COLUMN compressed_count "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+        if "compression_watermark" not in conv_cols:
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE conversations ADD COLUMN compression_watermark "
+                    "VARCHAR(36)"
+                )
+            )
+        if "context_summary" not in conv_cols:
+            sync_conn.execute(
+                text("ALTER TABLE conversations ADD COLUMN context_summary TEXT")
+            )

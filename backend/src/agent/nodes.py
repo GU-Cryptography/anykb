@@ -38,6 +38,11 @@ async def plan_node(
     v3-M1 (memory-optimization): constructs a layered prompt via
     ``build_context_sections`` + ``build_layered_prompt`` instead of
     passing ``system_prompt`` and ``messages`` directly to the LLM.
+
+    v3-M2: injects the L4 early-summary layer when the session has compressed
+    history. Requires ``conversation_id`` + ``user_id`` in state; when either
+    is missing (old frontend) or short-term memory is off, L4 is simply
+    omitted → identical to M1.
     """
     from src.agent.context_builder import build_layered_prompt
     from src.agent.prompts import build_context_sections
@@ -63,11 +68,31 @@ async def plan_node(
 
     s = get_settings()
 
-    # Build layered context (M1: L0 system definition + L5 recent messages).
+    # v3-M2: fetch the early-history summary (L4) for this conversation. Only
+    # when short-term memory is on AND the session id flowed in; any failure or
+    # missing id degrades to "" → L4 omitted (M1 behavior). Best-effort read
+    # never blocks the plan step. Fetched at most ONCE per request: the result
+    # (even "") is cached into agent state so later plan iterations (tool
+    # rounds, up to MAX_ITERATIONS) don't re-hit Redis/PG.
+    early_summary = state.get("early_summary")
+    if early_summary is None:
+        early_summary = ""
+        conv_id = state.get("conversation_id")
+        user_id = state.get("user_id")
+        if conv_id and user_id:
+            try:
+                from src.conversations.short_term_memory import get_context_summary
+
+                early_summary = await get_context_summary(user_id, conv_id) or ""
+            except Exception:  # noqa: BLE001 — L4 is best-effort, never break planning.
+                early_summary = ""
+
+    # Build layered context (M1: L0 + L5; M2 adds L4 when summary present).
     sections = build_context_sections(
         system_prompt_text=system_prompt,
         recent_messages=messages,
         memory_window_size=s.memory_window_size,
+        early_summary=early_summary,
     )
     layered = build_layered_prompt(
         sections,
@@ -157,6 +182,9 @@ async def plan_node(
         "iterations": iters + 1,
         "final_report": final_report,
         "cost_usd": cost.usd,
+        # v3-M2: persist the (possibly empty) L4 summary so subsequent plan
+        # iterations within this request skip the Redis/PG re-read.
+        "early_summary": early_summary,
     }
 
 

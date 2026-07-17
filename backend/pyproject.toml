@@ -31,6 +31,10 @@ dependencies = [
   "trafilatura>=1.12",      # HTML → clean text from URLs
   # v2-M5 — web search for unbound chat
   "ddgs>=4.0",              # DuckDuckGo search (no API key required)
+  # v3-M2 — short-term memory hot storage (Redis async). Optional at runtime:
+  # empty REDIS_URL keeps the feature dormant (pure-PG path), so the import is
+  # only exercised when Redis is actually configured.
+  "redis>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +43,8 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.5",
   "mypy>=1.10",
+  # v3-M2 — in-memory Redis fake for short-term memory tests (no real server).
+  "fakeredis>=2.20",
 ]
 ollama = ["ollama>=0.3"]
 openai = ["openai>=1.30"]
