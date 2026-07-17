@@ -74,6 +74,8 @@ def build_context_sections(
     recent_messages: list[dict] | None = None,
     memory_window_size: int = 10,
     early_summary: str = "",
+    user_profile: dict | None = None,
+    long_term_memories: list[dict] | None = None,
 ) -> list[Section]:
     """Build layered context sections for the LLM prompt.
 
@@ -81,7 +83,12 @@ def build_context_sections(
     v3-M2 adds L4 (early summary): the accumulated compression summary of
     rounds that slid out of the L5 window. Empty summary (default) produces
     no L4 section, so all pre-M2 callers keep their exact M1 behavior.
-    L1-L3 are reserved for M3 (user profile, long-term memory, task state).
+    v3-M3 adds L1 (user profile) and L2 (long-term memory). Both default to
+    None/empty and are omitted when there's nothing to inject, so pre-M3
+    callers keep identical output. L3 (task state) is reserved.
+
+    Layer ordering in the returned list is L0 < L1 < L2 < L4 < L5, matching the
+    prompt-assembly order (system layers first, then conversation).
 
     Returns a list of ``Section`` objects suitable for
     ``context_builder.build_layered_prompt()``.
@@ -101,6 +108,15 @@ def build_context_sections(
         Accumulated early-history summary (from short-term memory batch
         compression, see ``conversations/short_term_memory.py``).  "" = no
         compressed history → layer omitted.
+    user_profile:
+        L1 profile dict (``role`` / ``preferences`` / ``environment`` /
+        ``skills`` / ``current_project``) from
+        ``conversations/long_term_memory.get_user_profile``.  None or all-empty
+        → layer omitted (never injects an empty "未记录" card).
+    long_term_memories:
+        L2 recall list (each ``{memory_type, content}``) from
+        ``conversations/long_term_memory.retrieve_long_term_memories``.  None /
+        empty → layer omitted.
     """
     from src.agent.context_builder import CONTEXT_BUDGET, Section, window_messages
 
@@ -117,6 +133,35 @@ def build_context_sections(
             section_key="system_definition",
         )
     )
+
+    # L1: User profile (v3-M3, never truncated). Omitted when the profile is
+    # all-empty so a brand-new user's prompt is byte-identical to pre-M3.
+    profile_text = _render_profile_section(user_profile)
+    if profile_text:
+        sections.append(
+            Section(
+                layer=1,
+                role="system",
+                content=profile_text,
+                truncatable=False,
+                budget=CONTEXT_BUDGET["user_profile"],
+                section_key="user_profile",
+            )
+        )
+
+    # L2: Long-term memory (v3-M3, never truncated). Omitted when recall is empty.
+    memory_text = _render_long_term_memory_section(long_term_memories)
+    if memory_text:
+        sections.append(
+            Section(
+                layer=2,
+                role="system",
+                content=memory_text,
+                truncatable=False,
+                budget=CONTEXT_BUDGET["long_term_memory"],
+                section_key="long_term_memory",
+            )
+        )
 
     # L4: Early conversation summary (v3-M2, never truncated). Carries the
     # key facts from rounds already compressed out of the L5 window.
@@ -157,6 +202,50 @@ def build_context_sections(
     )
 
     return sections
+
+
+def _render_profile_section(user_profile: dict | None) -> str:
+    """Render the L1 profile card (PRD §6.3), or "" when there's nothing to say.
+
+    A profile with every field blank returns "" so the layer is dropped — we
+    never inject a card that's all "未记录".
+    """
+    from src.conversations.long_term_memory import profile_is_empty
+
+    if profile_is_empty(user_profile):
+        return ""
+    p = user_profile or {}
+    prefs = [str(x).strip() for x in (p.get("preferences") or []) if str(x).strip()]
+    skills = [str(x).strip() for x in (p.get("skills") or []) if str(x).strip()]
+    return (
+        "## 用户画像\n"
+        f"- 角色: {(p.get('role') or '').strip() or '未知'}\n"
+        f"- 技术偏好: {', '.join(prefs) or '未记录'}\n"
+        f"- 技能: {', '.join(skills) or '未记录'}\n"
+        f"- 环境: {(p.get('environment') or '').strip() or '未记录'}\n"
+        f"- 当前项目: {(p.get('current_project') or '').strip() or '未记录'}\n"
+        "基于以上画像调整回答风格和技术建议。"
+    )
+
+
+def _render_long_term_memory_section(memories: list[dict] | None) -> str:
+    """Render the L2 long-term memory list, or "" when recall is empty."""
+    if not memories:
+        return ""
+    lines = [
+        "## 长期记忆（跨会话）",
+        "以下是关于该用户的历史记忆，回答时可参考：",
+    ]
+    for m in memories:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        mtype = (m.get("memory_type") or m.get("type") or "").strip()
+        lines.append(f"- [{mtype}] {content}" if mtype else f"- {content}")
+    # If every memory had blank content the list is just the header → drop it.
+    if len(lines) <= 2:
+        return ""
+    return "\n".join(lines)
 
 
 def build_kb_system_prompt(

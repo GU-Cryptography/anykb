@@ -87,12 +87,46 @@ async def plan_node(
             except Exception:  # noqa: BLE001 — L4 is best-effort, never break planning.
                 early_summary = ""
 
-    # Build layered context (M1: L0 + L5; M2 adds L4 when summary present).
+    # v3-M3: fetch the L1 user profile + L2 long-term memories ONCE per request
+    # (keyed off "long_term_memory" not yet being in state), then cache both into
+    # agent state so tool-loop iterations skip the Redis/Milvus/PG reads — same
+    # once-per-request pattern as early_summary above. Requires user_id in state;
+    # anonymous / old-frontend requests (no user_id) skip L1+L2 entirely, which
+    # keeps their prompt identical to pre-M3. Any failure degrades to empty →
+    # the corresponding layer is simply omitted, never a broken plan step.
+    user_profile = state.get("user_profile")
+    long_term_memory = state.get("long_term_memory")
+    if "long_term_memory" not in state:
+        user_profile = {}
+        long_term_memory = []
+        user_id = state.get("user_id")
+        if user_id:
+            from src.conversations.long_term_memory import (
+                get_user_profile,
+                retrieve_long_term_memories,
+            )
+
+            try:
+                user_profile = await get_user_profile(user_id)
+            except Exception:  # noqa: BLE001 — L1 best-effort.
+                user_profile = {}
+            try:
+                # L2 query is the current user input (last plain user message).
+                long_term_memory = (
+                    await retrieve_long_term_memories(user_id, _last_user_text(messages))
+                    or []
+                )
+            except Exception:  # noqa: BLE001 — L2 best-effort.
+                long_term_memory = []
+
+    # Build layered context (M1: L0 + L5; M2 adds L4; M3 adds L1 + L2 when present).
     sections = build_context_sections(
         system_prompt_text=system_prompt,
         recent_messages=messages,
         memory_window_size=s.memory_window_size,
         early_summary=early_summary,
+        user_profile=user_profile,
+        long_term_memories=long_term_memory,
     )
     layered = build_layered_prompt(
         sections,
@@ -185,6 +219,10 @@ async def plan_node(
         # v3-M2: persist the (possibly empty) L4 summary so subsequent plan
         # iterations within this request skip the Redis/PG re-read.
         "early_summary": early_summary,
+        # v3-M3: persist the (possibly empty) L1 profile + L2 memories so
+        # subsequent plan iterations skip the re-read (once-per-request cache).
+        "user_profile": user_profile,
+        "long_term_memory": long_term_memory,
     }
 
 
@@ -291,6 +329,35 @@ def should_continue(state: AgentState) -> str:
     if state.get("pending_tool_calls"):
         return "tools"
     return "end"
+
+
+def _last_user_text(messages: list[dict[str, Any]]) -> str:
+    """Extract the current user query for L2 memory recall (v3-M3).
+
+    Returns the text of the most recent plain user turn — a ``user`` message
+    whose content is a string, OR the concatenated ``text`` blocks of a
+    list-form user message. Tool-result user messages (content is a list of
+    ``tool_result`` blocks, no free text) contribute nothing, so this reliably
+    returns the human's question even mid tool-loop. "" when none found.
+    """
+    for msg in reversed(messages or []):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            if content.strip():
+                return content.strip()
+            continue
+        if isinstance(content, list):
+            texts = [
+                b.get("text", "")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
+            joined = " ".join(t for t in texts if t).strip()
+            if joined:
+                return joined
+    return ""
 
 
 def _skill_tool_schema() -> dict[str, Any]:

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.infra.database import Base
@@ -136,5 +136,66 @@ class Message(Base):
             "tools": tools if tools is not None else ([] if self.role == "assistant" else None),
             "cost_usd": self.cost_usd,
             "error": self.error or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class UserMemory(Base):
+    """v3-M3: a single long-term memory extracted about a user (PRD §5.1).
+
+    Cross-session, user-scoped facts / preferences / skills / task notes that
+    survive the short-term (Redis window + L4 summary) memory. Rows are the
+    durable source of truth; the parallel ``user_memory_vectors`` collection
+    (see ``infra/memory_vector.py``) is a best-effort ANN index over ``content``
+    for L2 semantic recall — when it's unavailable (embedding unset, local
+    vector backend, or any failure) retrieval falls back to importance-ranked
+    rows here, so the feature degrades but never breaks.
+
+    ``memory_type`` is an application-level enum kept as a plain string for
+    SQLite/Postgres parity (same convention as ``Document.status`` /
+    ``Message.role``): profile | preference | fact | task | skill | explicit.
+
+    ``user_id`` is a soft FK (no ON DELETE) — ``auth.routes.purge_user`` clears
+    these rows (plus the vector chain) explicitly, mirroring how KBs and
+    conversations are purged.
+
+    Type portability: ``Float`` → REAL (SQLite) / double precision (Postgres),
+    ``DateTime(timezone=True)`` → tz-aware on both; no dialect-specific DDL, so
+    the table is born via ``init_db``'s ``create_all`` (no ALTER needed — it's a
+    brand-new table, registered on ``Base.metadata`` through this module's
+    import in ``infra/database.py:init_db``).
+    """
+
+    __tablename__ = "user_memories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source_conversation_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    importance: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    access_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_user_memories_user", "user_id", "memory_type"),
+    )
+
+    def to_public_dict(self) -> dict:
+        """Payload for the M4 ``GET /api/memories`` listing (defined now so the
+        model is the single source of truth for the memory shape)."""
+        return {
+            "id": self.id,
+            "type": self.memory_type,
+            "content": self.content or "",
+            "importance": self.importance,
+            "source_conversation_id": self.source_conversation_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

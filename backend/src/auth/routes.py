@@ -136,16 +136,31 @@ async def purge_user(session: AsyncSession, user: User) -> None:
     NOTE: per-KB vector collections are not dropped here (bulk path, mirrors the
     original self-delete behavior). Single-KB deletion via kb.routes.purge_kb is
     what drops vector collections.
+
+    v3-M3: long-term memory rows (user_memories) are cleared here too, and the
+    matching vectors are dropped from the shared user_memory_vectors collection
+    as a best-effort chain (PRD §5.7). The vector delete runs after the PG commit
+    and swallows its own errors, so a vector-backend outage never blocks the
+    user purge — orphaned vectors (filtered by a now-nonexistent user_id) are
+    unreachable and harmless.
     """
     from sqlalchemy import delete
 
-    from src.conversations.models import Conversation
+    from src.conversations.models import Conversation, UserMemory
     from src.kb.models import KB
 
+    await session.execute(delete(UserMemory).where(UserMemory.user_id == user.id))
     await session.execute(delete(Conversation).where(Conversation.user_id == user.id))
     await session.execute(delete(KB).where(KB.user_id == user.id))
+    user_id = user.id
     await session.delete(user)
     await session.commit()
+
+    # Best-effort vector chain (both backends via the shared abstraction; the
+    # local SQLite store is skipped inside the helper). Never raises.
+    from src.infra.memory_vector import delete_memory_vectors_by_user
+
+    await delete_memory_vectors_by_user(user_id)
 
 
 @router.delete("/me")

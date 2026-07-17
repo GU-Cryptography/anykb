@@ -30,3 +30,11 @@ class AgentState(TypedDict, total=False):
     # the first iteration and stores it here (possibly "") so tool-loop
     # iterations don't repeat the Redis/PG read. Absent = not fetched yet.
     early_summary: str
+    # v3-M3 memory-optimization: per-request cache of the L1 user profile and
+    # L2 long-term memories. plan_node fetches BOTH once on the first iteration
+    # (keyed off "long_term_memory" not being in state yet) and stores them so
+    # later tool-loop iterations skip the Redis/Milvus/PG reads — same
+    # once-per-request pattern as early_summary. user_profile may be an
+    # all-empty dict (→ L1 omitted); long_term_memory may be [] (→ L2 omitted).
+    user_profile: dict[str, Any]
+    long_term_memory: list[dict[str, Any]]

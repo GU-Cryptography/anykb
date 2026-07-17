@@ -289,18 +289,28 @@ async def append_message(
 
     # v3-M2 memory-optimization: after archiving to PG, feed the message into
     # the short-term memory path (Redis hot window + async batch compression).
-    # Fire-and-forget — never blocks the response; no-op when REDIS_URL unset.
-    # Compression reuses the user's per-session LLM (BYOK + per-conversation
-    # model override), matching app._run_chat_session's resolution.
+    # v3-M3: also fire real-time keyword-triggered long-term extraction.
+    # Both are fire-and-forget — never block the response. The session LLM cfg
+    # (BYOK + per-conversation model override) is resolved once and shared,
+    # matching app._run_chat_session's resolution.
+    from src.conversations.long_term_memory import schedule_keyword_extraction
     from src.conversations.short_term_memory import (
         resolve_session_llm,
         schedule_memory_update,
         short_term_memory_enabled,
     )
+    from src.settings import get_settings
 
-    if short_term_memory_enabled():
+    stm_on = short_term_memory_enabled()
+    auto_extract = get_settings().memory_auto_extract
+    if stm_on or auto_extract:
         llm_cfg = resolve_session_llm(user, conv)
-        schedule_memory_update(user.id, conv.id, req.role, req.content or "", llm_cfg)
+        if stm_on:
+            schedule_memory_update(user.id, conv.id, req.role, req.content or "", llm_cfg)
+        # Gated inside on memory_auto_extract + role=="user" + a regex hit (a
+        # cheap pre-check), so non-user / non-matching turns cost only one regex
+        # pass and spawn no task.
+        schedule_keyword_extraction(user.id, conv.id, req.role, req.content or "", llm_cfg)
 
     return msg.to_public_dict()
 
