@@ -537,7 +537,9 @@ export default function Page() {
               break;
           }
         },
-        { kbId: currentKbId, model: currentModel }
+        // v3-M2: convId is always resolved by now (existing conversation or
+        // lazily created above), so plan_node can pick up its L4 summary.
+        { kbId: currentKbId, model: currentModel, conversationId: convId }
       );
 
       cleanupRef.current = cleanup;

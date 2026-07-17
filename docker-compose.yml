@@ -17,6 +17,23 @@ services:
       timeout: 3s
       retries: 10
 
+  # ===== Redis (short-term memory hot cache, v3-M2 memory-optimization) =====
+  # Holds the sliding-window messages / compression summaries / profile hashes
+  # with TTLs; PostgreSQL remains the source of truth, so losing this data is
+  # harmless (backend falls back to PG per-op). appendonly + a small volume
+  # keep warm summaries across restarts at negligible cost.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ===== Backend (FastAPI + LangGraph + Milvus Lite embedded) =====
   # Milvus Lite is pure-Python and lives inside the backend process. Its .db
   # file is persisted in the backend-data volume. To switch to Milvus Standalone
@@ -27,6 +44,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       # --- App DB ---
       DATABASE_URL: postgresql+asyncpg://anykb:${POSTGRES_PASSWORD}@postgres:5432/anykb
@@ -35,6 +54,12 @@ services:
       VECTOR_STORE: milvus
       MILVUS_URI: /app/data/milvus_local.db
       MILVUS_TOKEN: ""
+
+      # --- Short-term memory (v3-M2) — Redis hot cache, blank would disable ---
+      REDIS_URL: redis://redis:6379/0
+      MEMORY_WINDOW_SIZE: ${MEMORY_WINDOW_SIZE:-10}
+      MEMORY_COMPRESSION_BATCH: ${MEMORY_COMPRESSION_BATCH:-5}
+      CONTEXT_TOTAL_BUDGET: ${CONTEXT_TOTAL_BUDGET:-8000}
 
       # --- Auth + encryption ---
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
@@ -93,4 +118,5 @@ services:
 volumes:
   postgres-data:
   backend-data:
+  redis-data:
   certbot-www:

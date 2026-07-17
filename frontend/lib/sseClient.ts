@@ -41,12 +41,16 @@ import { getToken } from "@/lib/auth";
  * If null/undefined, the agent runs in unbound mode (system travel demo
  * fallback or multi-tool when no kb_id is passed).
  *
+ * opts.conversationId — v3-M2 memory-optimization: lets plan_node read this
+ * conversation's early-summary (L4 layer). Omitted when the conversation has
+ * no server id yet; the backend treats a missing id as "no L4 layer".
+ *
  * Returns a cancel function that aborts the in-flight request.
  */
 export function connectChat(
   messages: ChatMessage[],
   onEvent: (e: ChatEvent) => void,
-  opts?: { kbId?: string | null; model?: string | null }
+  opts?: { kbId?: string | null; model?: string | null; conversationId?: string | null }
 ): () => void {
   const controller = new AbortController();
 
@@ -61,6 +65,7 @@ export function connectChat(
     const body: Record<string, unknown> = { messages };
     if (opts?.kbId) body.kb_id = opts.kbId;
     if (opts?.model) body.model = opts.model;
+    if (opts?.conversationId) body.conversation_id = opts.conversationId;
 
     let resp: Response;
     try {
