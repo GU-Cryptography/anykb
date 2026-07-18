@@ -9,8 +9,12 @@ short-term memory scaffolding. Three extraction sources feed the durable
     trips ``keyword_extractor`` is formatted by the SESSION LLM into one memory.
   * session-end extraction (``extract_conversation_memories``) — the whole
     conversation is summarized by the SESSION LLM into a memory array. M3 ships
-    the function + tests; M4 wires the ``POST /finalize`` HTTP trigger.
-  * (M5, out of scope) timed dedup / decay.
+    the function + tests; M4 wires the ``POST /finalize`` HTTP trigger; M5's
+    ``memory_maintenance.scan_stale_conversations`` calls it for 24h-idle
+    conversations the user never explicitly ended.
+  * (M5) timed dedup / decay / eviction — see ``memory_maintenance.py``; this
+    module supplies the soft-delete-aware read paths and the L2 access counter
+    (``schedule_touch_memories``) that feed it.
 
 Two read paths consume the memories:
 
@@ -41,10 +45,11 @@ import json
 import logging
 import re
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from src.conversations.short_term_memory import (
     resolve_session_llm,
@@ -438,6 +443,7 @@ async def _aggregate_profile_pg(user_id: str) -> dict[str, Any]:
                         .where(
                             UserMemory.user_id == user_id,
                             UserMemory.memory_type.in_(_PROFILE_SOURCE_TYPES),
+                            UserMemory.deleted_at.is_(None),
                         )
                         .order_by(
                             UserMemory.importance.desc(), UserMemory.created_at.desc()
@@ -536,7 +542,9 @@ async def _load_memories_by_ids(user_id: str, ids: list[str]) -> list[dict[str, 
             (
                 await session.execute(
                     select(UserMemory).where(
-                        UserMemory.user_id == user_id, UserMemory.id.in_(ids)
+                        UserMemory.user_id == user_id,
+                        UserMemory.id.in_(ids),
+                        UserMemory.deleted_at.is_(None),
                     )
                 )
             )
@@ -557,7 +565,10 @@ async def _pg_top_memories(user_id: str, limit: int) -> list[dict[str, Any]]:
             (
                 await session.execute(
                     select(UserMemory)
-                    .where(UserMemory.user_id == user_id)
+                    .where(
+                        UserMemory.user_id == user_id,
+                        UserMemory.deleted_at.is_(None),
+                    )
                     .order_by(
                         UserMemory.importance.desc(), UserMemory.created_at.desc()
                     )
@@ -594,11 +605,18 @@ async def retrieve_long_term_memories(
                 except Exception as exc:  # noqa: BLE001 — degrade to PG fallback.
                     log.warning("memory_recall_vector_failed user=%s error=%s", user_id, exc)
                     ids = []
+        result: list[dict[str, Any]] = []
         if ids:
-            hit = await _load_memories_by_ids(user_id, ids)
-            if hit:
-                return hit
-        return await _pg_top_memories(user_id, limit)
+            result = await _load_memories_by_ids(user_id, ids)
+        if not result:
+            result = await _pg_top_memories(user_id, limit)
+        # v3-M5: the recalled rows are about to be injected into the prompt, i.e.
+        # genuinely accessed — bump access_count / last_accessed_at so the nightly
+        # decay job can tell hot memories from cold ones. Fire-and-forget: an
+        # UPDATE must never delay planning, and its failure is irrelevant to chat.
+        if result:
+            schedule_touch_memories(user_id, [m["id"] for m in result])
+        return result
     except Exception as exc:  # noqa: BLE001 — L2 is best-effort, never break planning.
         log.warning("memory_recall_failed user=%s error=%s", user_id, exc)
         return []
@@ -612,6 +630,53 @@ async def search_memory_vectors_ids(
     from src.infra.memory_vector import search_memory_vectors
 
     return await search_memory_vectors(vec, user_id, limit)
+
+
+# ---------------------------------------------------------------------------
+# L2 access accounting (v3-M5) — fire-and-forget touch after a recall
+# ---------------------------------------------------------------------------
+def schedule_touch_memories(user_id: str, memory_ids: list[str]) -> None:
+    """Fire-and-forget bump of access_count / last_accessed_at for recalled rows.
+
+    Scheduled from ``retrieve_long_term_memories`` on every non-empty recall so
+    the nightly decay job (``memory_maintenance``) can distinguish hot memories
+    from cold ones — without it every memory looks permanently unaccessed and
+    decay would punish rows the user relies on. Detached and best-effort
+    (background-tasks-guidelines): owns its DB session, never blocks planning,
+    swallows its own errors. No-op on empty input.
+    """
+    if not user_id or not memory_ids:
+        return
+    task = asyncio.create_task(_touch_memories(user_id, list(memory_ids)))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+async def _touch_memories(user_id: str, memory_ids: list[str]) -> None:
+    from src.conversations.models import UserMemory
+    from src.infra.database import get_session_factory
+
+    try:
+        now = datetime.now(timezone.utc)
+        async with get_session_factory()() as session:
+            # Owner-scoped (agent-context-guidelines isolation): a stale id from a
+            # foreign recall can only miss. Soft-deleted rows are excluded — a
+            # concurrently-culled memory shouldn't be resurrected as "accessed".
+            await session.execute(
+                update(UserMemory)
+                .where(
+                    UserMemory.user_id == user_id,
+                    UserMemory.id.in_(memory_ids),
+                    UserMemory.deleted_at.is_(None),
+                )
+                .values(
+                    access_count=UserMemory.access_count + 1,
+                    last_accessed_at=now,
+                )
+            )
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001 — accounting is best-effort, never breaks chat.
+        log.warning("memory_touch_failed user=%s error=%s", user_id, exc)
 
 
 # ---------------------------------------------------------------------------

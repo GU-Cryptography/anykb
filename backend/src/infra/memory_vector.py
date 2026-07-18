@@ -58,6 +58,18 @@ def _multi_collection(store: Any) -> bool:
     return hasattr(store, "create_collection") and hasattr(store, "delete_by_filter")
 
 
+def vector_capability_available() -> bool:
+    """True when the active backend supports the memory-vector collection ops.
+
+    A cheap up-front probe so the v3-M5 maintenance dedup can skip its whole
+    embed-then-search loop on the ``local`` backend (where every search would
+    return ``[]`` anyway) instead of billing the user's embedding key per row for
+    a guaranteed-empty ANN query. Mirrors the ``_multi_collection`` gate the
+    write / read helpers already apply per call.
+    """
+    return _multi_collection(get_store())
+
+
 async def upsert_memory_vector(
     memory_id: str,
     vector: list[float],
@@ -138,6 +150,44 @@ async def search_memory_vectors(
         mid = payload.get("memory_id") or h.get("id")
         if mid:
             out.append(str(mid))
+    return out
+
+
+async def search_memory_vectors_scored(
+    vector: list[float], user_id: str, limit: int = 50
+) -> list[tuple[str, float]]:
+    """ANN search this user's memory vectors → ``[(memory_id, score), ...]``.
+
+    The score-carrying sibling of :func:`search_memory_vectors`, used by the
+    v3-M5 maintenance dedup to threshold near-duplicate neighbors (cosine >
+    0.85). The underlying store already returns a Qdrant-equivalent similarity
+    ``score`` in ``[0, 1]`` (``vector_store.py`` normalizes Milvus distance), so
+    this is the minimal faithful extension the task calls for — same isolation
+    (``user_id`` filter) and same degradation contract: ``[]`` on any degrade
+    (unsupported backend / cold collection / store error), never raises.
+    """
+    if not vector:
+        return []
+    store = get_store()
+    if not _multi_collection(store):
+        return []
+    try:
+        hits = await store.search(
+            vector,
+            collection_name=MEMORY_COLLECTION,
+            limit=limit,
+            filters={"user_id": user_id},
+        )
+    except Exception as exc:  # noqa: BLE001 — degrade to no-dedup, never break maintenance.
+        log.warning("memory_vector_search_scored_failed user=%s error=%s", user_id, exc)
+        return []
+    out: list[tuple[str, float]] = []
+    for h in hits or []:
+        payload = h.get("payload") or {}
+        mid = payload.get("memory_id") or h.get("id")
+        score = h.get("score")
+        if mid and score is not None:
+            out.append((str(mid), float(score)))
     return out
 
 

@@ -12,6 +12,7 @@ import {
   updateMemory,
   deleteMemory,
   type Memory,
+  type MemoryStats,
   type MemoryType,
 } from "@/lib/memories-api";
 import { cn } from "@/lib/cn";
@@ -53,6 +54,7 @@ export default function MemoriesPage() {
   const router = useRouter();
   const [memories, setMemories] = useState<Memory[]>([]);
   const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<MemoryStats | null>(null);
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState<MemoryType | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,6 +75,7 @@ export default function MemoriesPage() {
       .then((r) => {
         setMemories(r.memories);
         setTotal(r.total);
+        setStats(r.stats);
         setOffset(r.offset);
       })
       .catch((e) => toast.error((e as Error).message))
@@ -162,6 +165,25 @@ export default function MemoriesPage() {
         <div className="mb-4 text-sm text-muted">
           这里是助手从你的对话中长期记住的信息，会在后续对话中作为背景注入。你可以编辑或删除任意一条。
         </div>
+
+        {/* Stats bar (v3-M5): active total + per-type count badges. */}
+        {stats && stats.active_total > 0 && (
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted">
+              共 {stats.active_total} 条长期记忆
+            </span>
+            {FILTERS.filter((f) => f.value != null).map((f) => {
+              const count = stats.by_type[f.value as MemoryType] ?? 0;
+              if (count === 0) return null;
+              const meta = TYPE_META[f.value as MemoryType];
+              return (
+                <span key={f.label} className={cn("chip", meta.chip)}>
+                  {meta.label} {count}
+                </span>
+              );
+            })}
+          </div>
+        )}
 
         {/* Type filter */}
         <div className="mb-4 flex flex-wrap gap-1.5">

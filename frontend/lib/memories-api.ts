@@ -29,11 +29,19 @@ export type Memory = {
   created_at: string | null;
 };
 
+export type MemoryStats = {
+  /** Active (non-soft-deleted) memory count per type; sparse — absent = 0. */
+  by_type: Partial<Record<MemoryType, number>>;
+  active_total: number;
+};
+
 export type MemoryListResponse = {
   total: number;
   limit: number;
   offset: number;
   memories: Memory[];
+  /** v3-M5: filter-independent summary of all the user's active memories. */
+  stats: MemoryStats;
 };
 
 /** Structured error mirror of ConversationApiError. */

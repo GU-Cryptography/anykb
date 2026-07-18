@@ -195,6 +195,22 @@ class UserMemory(Base):
         DateTime(timezone=True), default=_utcnow, nullable=False
     )
 
+    # v3-M5 memory-optimization: maintenance bookkeeping (PRD §5.6).
+    # deleted_at      — soft-delete marker. The nightly maintenance job (dedup /
+    #   eviction) stamps this instead of hard-deleting, so a mistakenly culled
+    #   memory is recoverable; every read path filters ``deleted_at IS NULL``. The
+    #   matching vector IS hard-deleted at cull time (the ANN index has no soft
+    #   state). User-initiated DELETE stays a hard delete (routes).
+    # last_decayed_at — idempotency gate for importance decay. The decay UPDATE
+    #   only fires when this is NULL or older than ~a day, so two maintenance runs
+    #   the same night (or two instances) decay a row at most once.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    last_decayed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
     __table_args__ = (
         Index("idx_user_memories_user", "user_id", "memory_type"),
     )

@@ -119,6 +119,19 @@ class Settings(BaseSettings):
     memory_auto_extract: bool = True
     memory_retention_days: int = 90
 
+    # ===== Memory maintenance (v3-M5 memory-optimization) =====
+    # Nightly background job: vector dedup + importance decay + eviction of
+    # low-value memories, plus a 24h-idle conversation scan that finalizes +
+    # extracts long-term memories the user never explicitly ended (PRD §5.3/§5.6).
+    # False → the loop is never started (cleanest off-switch; no background task).
+    # The scan half is additionally gated on memory_auto_extract inside each
+    # round, so turning extraction off leaves dedup/decay running but skips the
+    # scan (they're orthogonal — one maintains stored rows, the other creates new
+    # ones). memory_retention_days stays a reserved placeholder (PRD didn't define
+    # its semantics; not wired to avoid inventing a requirement).
+    memory_maintenance_enabled: bool = True
+    memory_maintenance_hour: int = 3   # local wall hour (UTC) to run the nightly round
+
     # ===== Server =====
     app_env: str = "dev"
     log_level: str = "INFO"

@@ -184,7 +184,84 @@ async def test_list_is_owner_scoped(client, create_user, db):
 
     r = await client.get("/api/memories", headers=_headers(_token(a)))
     assert r.status_code == 200
-    assert r.json() == {"total": 0, "limit": 50, "offset": 0, "memories": []}
+    assert r.json() == {
+        "total": 0,
+        "limit": 50,
+        "offset": 0,
+        "memories": [],
+        "stats": {"by_type": {}, "active_total": 0},
+    }
+
+
+# =========================================================================== #
+# GET /api/memories — v3-M5 stats + soft-delete exclusion
+# =========================================================================== #
+async def test_list_stats_by_type_and_active_total(client, create_user, db):
+    """stats is a filter-independent summary of the user's ACTIVE memories."""
+    user = await create_user("stats@x.com")
+    for _ in range(3):
+        await _seed_memory(db, user.id, mtype="preference", content="p")
+    for _ in range(2):
+        await _seed_memory(db, user.id, mtype="fact", content="f")
+    await _seed_memory(db, user.id, mtype="skill", content="s")
+
+    # Even with a ?type= filter, stats reflects ALL active memories, not the page.
+    r = await client.get("/api/memories?type=fact", headers=_headers(_token(user)))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2  # the filtered list total
+    assert body["stats"]["by_type"] == {"preference": 3, "fact": 2, "skill": 1}
+    assert body["stats"]["active_total"] == 6
+
+
+async def test_list_and_stats_exclude_soft_deleted(client, create_user, db):
+    """v3-M5: soft-deleted rows vanish from the list, total, AND stats."""
+    from datetime import datetime, timezone
+
+    from src.conversations.models import UserMemory
+
+    user = await create_user("softdel@x.com")
+    live = await _seed_memory(db, user.id, mtype="fact", content="活着")
+    dead = await _seed_memory(db, user.id, mtype="fact", content="已软删")
+
+    # Soft-delete one row directly (as the maintenance job would).
+    async with db.get_session_factory()() as s:
+        row = await s.get(UserMemory, dead)
+        row.deleted_at = datetime.now(timezone.utc)
+        await s.commit()
+
+    r = await client.get("/api/memories", headers=_headers(_token(user)))
+    body = r.json()
+    assert body["total"] == 1
+    assert [m["id"] for m in body["memories"]] == [live]
+    assert body["stats"] == {"by_type": {"fact": 1}, "active_total": 1}
+
+
+async def test_patch_and_delete_soft_deleted_row_404(client, create_user, db):
+    """v3-M5: a soft-deleted row is gone to the user — PATCH/DELETE both 404,
+    so the maintenance janitor's cull can't be resurrected or double-deleted."""
+    from datetime import datetime, timezone
+
+    from src.conversations.models import UserMemory
+
+    user = await create_user("softdel404@x.com")
+    dead = await _seed_memory(db, user.id, mtype="fact", content="已软删")
+    async with db.get_session_factory()() as s:
+        row = await s.get(UserMemory, dead)
+        row.deleted_at = datetime.now(timezone.utc)
+        await s.commit()
+
+    r = await client.patch(
+        f"/api/memories/{dead}", json={"content": "复活?"}, headers=_headers(_token(user))
+    )
+    assert r.status_code == 404
+    r = await client.delete(f"/api/memories/{dead}", headers=_headers(_token(user)))
+    assert r.status_code == 404
+
+    # The row is untouched (content not resurrected, deleted_at intact).
+    async with db.get_session_factory()() as s:
+        row = await s.get(UserMemory, dead)
+        assert row is not None and row.content == "已软删" and row.deleted_at is not None
 
 
 # =========================================================================== #

@@ -61,7 +61,20 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
 
     await seed_admins()
     log.info("admins_seeded")
+
+    # v3-M5: nightly memory maintenance loop (vector dedup + decay + eviction,
+    # 24h-idle conversation scan). Starts only when memory_maintenance_enabled is
+    # True; the strong task ref lives inside the module. httpx test clients don't
+    # run lifespan, so the loop never auto-starts under tests.
+    from src.conversations.memory_maintenance import (
+        start_memory_maintenance,
+        stop_memory_maintenance,
+    )
+
+    maintenance_task = start_memory_maintenance()
+    log.info("memory_maintenance", running=maintenance_task is not None)
     yield
+    await stop_memory_maintenance()
     log.info("shutdown")
 
 

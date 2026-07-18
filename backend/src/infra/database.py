@@ -237,3 +237,28 @@ def _migrate_additive_columns(sync_conn) -> None:
                     "TIMESTAMP WITH TIME ZONE"
                 )
             )
+
+    # v3-M5 memory-optimization: user_memories soft-delete + decay bookkeeping.
+    # The table itself is born via create_all (brand-new in M3), but a DB that
+    # already ran M3 has the table WITHOUT these two columns, so they must be
+    # added in place. Runs against the already-existing prod user_memories table
+    # (PostgreSQL via asyncpg), so the DDL must be portable: TIMESTAMP WITH TIME
+    # ZONE is valid PostgreSQL and accepted by SQLite (matches the model's
+    # DateTime(timezone=True)); both nullable, so no boolean-default trap applies
+    # (cf. the users.is_admin note above).
+    if "user_memories" in tables:
+        um_cols = {c["name"] for c in insp.get_columns("user_memories")}
+        if "deleted_at" not in um_cols:
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE user_memories ADD COLUMN deleted_at "
+                    "TIMESTAMP WITH TIME ZONE"
+                )
+            )
+        if "last_decayed_at" not in um_cols:
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE user_memories ADD COLUMN last_decayed_at "
+                    "TIMESTAMP WITH TIME ZONE"
+                )
+            )

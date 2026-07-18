@@ -51,14 +51,16 @@ class PatchMemoryRequest(BaseModel):
 async def _load_owned_memory(
     session: AsyncSession, mem_id: str, user_id: str
 ) -> UserMemory:
-    """Fetch a memory owned by ``user_id``, else 404 (no existence leak).
+    """Fetch a live memory owned by ``user_id``, else 404 (no existence leak).
 
     Double-scoped on purpose: ``session.get`` by pk, then an explicit owner
     check — a valid id belonging to another user is indistinguishable from a
-    missing one.
+    missing one. A soft-deleted row (v3-M5: the nightly maintenance job culls by
+    stamping ``deleted_at``) is likewise treated as gone — it must not be
+    PATCH-resurrected or double-deleted — so it 404s the same as a missing id.
     """
     mem = await session.get(UserMemory, mem_id)
-    if mem is None or mem.user_id != user_id:
+    if mem is None or mem.user_id != user_id or mem.deleted_at is not None:
         raise HTTPException(status_code=404, detail="memory not found")
     return mem
 
@@ -76,12 +78,19 @@ async def list_memories(
 ) -> dict:
     """List the current user's long-term memories, newest first (PRD §8).
 
-    Always scoped to the authenticated user. Optional ``?type=`` filters to one
-    memory_type (invalid values → 422 via the Literal). Paginated with
-    ``limit`` (1–200) / ``offset``; ``total`` is the unpaginated owner+filter
-    count so the frontend can render page controls.
+    Always scoped to the authenticated user, excluding soft-deleted rows (v3-M5:
+    the nightly maintenance job dedups / evicts by stamping ``deleted_at``).
+    Optional ``?type=`` filters to one memory_type (invalid values → 422 via the
+    Literal). Paginated with ``limit`` (1–200) / ``offset``; ``total`` is the
+    unpaginated owner+filter count so the frontend can render page controls.
+
+    ``stats`` (v3-M5) is a lightweight, filter-independent summary of the user's
+    ACTIVE memories — ``{by_type: {type: count}, active_total}`` — from one extra
+    aggregate query, so the page can render per-type count badges without a new
+    endpoint.
     """
-    where = [UserMemory.user_id == user.id]
+    active_only = UserMemory.deleted_at.is_(None)
+    where = [UserMemory.user_id == user.id, active_only]
     if memory_type is not None:
         where.append(UserMemory.memory_type == memory_type)
 
@@ -101,11 +110,24 @@ async def list_memories(
         .scalars()
         .all()
     )
+
+    # One aggregate over ALL of the user's active memories (independent of the
+    # ?type filter + pagination) → per-type counts for the stats bar.
+    stats_rows = (
+        await session.execute(
+            select(UserMemory.memory_type, func.count())
+            .where(UserMemory.user_id == user.id, active_only)
+            .group_by(UserMemory.memory_type)
+        )
+    ).all()
+    by_type = {mtype: int(cnt) for mtype, cnt in stats_rows}
+
     return {
         "total": total or 0,
         "limit": limit,
         "offset": offset,
         "memories": [m.to_public_dict() for m in rows],
+        "stats": {"by_type": by_type, "active_total": sum(by_type.values())},
     }
 
 
