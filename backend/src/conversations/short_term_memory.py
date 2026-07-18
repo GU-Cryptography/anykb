@@ -172,6 +172,25 @@ async def _read_summary_pg(session: Any, user_id: str, conv_id: str) -> str:
     return conv.context_summary or ""
 
 
+async def clear_conversation_hot_state(user_id: str, conv_id: str) -> None:
+    """Drop a conversation's Redis hot keys (window + meta) — called on finalize.
+
+    Best-effort (mirrors ``invalidate_profile_cache``): no-op when the feature is
+    off, and swallows any Redis error. Only the hot cache is cleared — the
+    durable PG copy (messages archive + ``context_summary``) is untouched, so a
+    later read simply re-warms from PG. Keys are namespaced by the authenticated
+    uid, so a forged conv id can only clear that user's own (nonexistent) keys.
+    """
+    if not short_term_memory_enabled():
+        return
+    try:
+        await get_redis().delete(
+            _messages_key(user_id, conv_id), _meta_key(user_id, conv_id)
+        )
+    except Exception:  # noqa: BLE001 — hot-key cleanup is best-effort.
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Orchestration — called from routes.append_message
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.middleware import CurrentUser
@@ -313,6 +313,83 @@ async def append_message(
         schedule_keyword_extraction(user.id, conv.id, req.role, req.content or "", llm_cfg)
 
     return msg.to_public_dict()
+
+
+@router.post("/{conv_id}/finalize")
+async def finalize_conversation(
+    conv_id: str,
+    user: CurrentUser,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Mark a conversation finished → extract long-term memories (PRD §8).
+
+    Idempotent AND concurrency-safe: the ``finalized_at`` stamp is applied with
+    an atomic compare-and-swap (``UPDATE ... WHERE finalized_at IS NULL``), never
+    a read-modify-write. Two finalize requests that race — both seeing the row
+    open — cannot both extract: exactly one UPDATE matches (``rowcount == 1``),
+    the loser gets ``rowcount == 0`` and returns ``already_finalized`` without
+    re-extracting (background-tasks-guidelines: CAS gate, not blind read-modify-
+    write, or duplicate memories get written under concurrent finalize).
+
+    First (winning) call: run ``extract_conversation_memories`` — AWAITED, since
+    this is a user-initiated action whose count the caller wants (the extractor
+    owns its own sessions, reuses the SESSION LLM, defensively parses, and never
+    raises), clear the conversation's Redis hot keys (best-effort), and report
+    the count.
+
+    Extraction is best-effort by design: ``memory_auto_extract=false`` or an LLM
+    failure yields 0 WITHOUT rolling back ``finalized_at`` — the semantics are
+    "the session has ended; extraction was attempted." ``profile_updated`` is
+    ``True`` iff at least one memory was stored (any new memory may shift the L1
+    aggregate, whose cache the persist path already invalidates).
+    """
+    # Atomic finalize gate (CAS): flip finalized_at NULL→now for exactly one
+    # caller. Owner-scoped in the same predicate so a foreign id can never stamp.
+    result = await session.execute(
+        update(Conversation)
+        .where(
+            Conversation.id == conv_id,
+            Conversation.user_id == user.id,
+            Conversation.finalized_at.is_(None),
+        )
+        .values(finalized_at=datetime.now(timezone.utc))
+    )
+    await session.commit()
+
+    # Re-read owner-scoped: a foreign/missing id 404s (the CAS matched 0 rows for
+    # those too, but 404 must win over already_finalized — no existence leak).
+    # For an owned row this also supplies the per-conversation LLM override below.
+    conv = await _load_owned_conversation(session, conv_id, user.id)
+
+    if result.rowcount == 0:
+        # Already finalized (or a concurrent finalize won the race) → no re-extract.
+        return {
+            "memory_extracted": 0,
+            "profile_updated": False,
+            "already_finalized": True,
+        }
+
+    # We won the CAS. Resolve the session LLM once (BYOK + per-conversation
+    # override), exactly like append_message — passing it in avoids a redundant
+    # id-based re-resolve inside the extractor.
+    from src.conversations.long_term_memory import extract_conversation_memories
+    from src.conversations.short_term_memory import (
+        clear_conversation_hot_state,
+        resolve_session_llm,
+    )
+
+    llm_cfg = resolve_session_llm(user, conv)
+    extracted = await extract_conversation_memories(conv_id, user.id, llm_cfg)
+
+    # Best-effort hot-key cleanup: the session is over, so drop its Redis window
+    # + meta. The durable PG copy survives; failure never affects the response.
+    await clear_conversation_hot_state(user.id, conv_id)
+
+    return {
+        "memory_extracted": extracted,
+        "profile_updated": extracted > 0,
+        "already_finalized": False,
+    }
 
 
 @router.post("/import")

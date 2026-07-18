@@ -104,6 +104,10 @@ app.include_router(kb_router)
 app.include_router(invitations_router)
 app.include_router(conversations_router)
 
+from src.conversations.memory_routes import router as memories_router  # noqa: E402
+
+app.include_router(memories_router)
+
 from src.settings_user.routes import router as settings_router  # noqa: E402
 
 app.include_router(settings_router)

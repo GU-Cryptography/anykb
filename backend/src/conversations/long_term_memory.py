@@ -355,6 +355,39 @@ async def _persist_memory(
     return mem_id
 
 
+async def reindex_memory_vector(
+    memory_id: str,
+    user_id: str,
+    memory_type: str,
+    content: str,
+    importance: float,
+) -> None:
+    """Re-index one memory's vector after an edit (M4 ``PATCH /api/memories/{id}``).
+
+    Resolves the user's embedding cfg through the SAME seam as write/recall (so
+    the edited vector stays in the read embedding space), re-embeds *content*,
+    and upserts — overwriting the prior point's vector AND payload (new
+    ``text`` + ``importance``). The vector store exposes only whole-point upsert
+    (no payload-only patch), so an importance-only edit still re-embeds the
+    unchanged content; that's the accepted cost of keeping the index consistent.
+
+    Best-effort optional infra (error-handling.md / vector-store-guidelines): a
+    no-op when embedding is unconfigured, and any failure is logged + swallowed —
+    the durable PG row (already committed by the caller) stays the source of
+    truth, and L2 still recalls it via the importance-ranked PG fallback.
+    """
+    try:
+        embedding_cfg = await _resolve_user_embedding_by_id(user_id)
+        if embedding_cfg is None:
+            return
+        vec = await embed(content, cfg=embedding_cfg)
+        await upsert_memory_vector(
+            memory_id, vec, content, user_id, memory_type, importance
+        )
+    except Exception as exc:  # noqa: BLE001 — vector index is optional infra.
+        log.warning("memory_reindex_failed memory=%s error=%s", memory_id, exc)
+
+
 # ---------------------------------------------------------------------------
 # User profile (L1): Redis hot Hash → PG aggregate fallback (PRD §6)
 # ---------------------------------------------------------------------------

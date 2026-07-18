@@ -222,3 +222,18 @@ def _migrate_additive_columns(sync_conn) -> None:
             sync_conn.execute(
                 text("ALTER TABLE conversations ADD COLUMN context_summary TEXT")
             )
+
+        # v3-M4 memory-optimization: conversations.finalized_at (nullable
+        # timestamp) — set once by POST /{id}/finalize, then the idempotency
+        # guard for long-term memory extraction. Runs against the already-existing
+        # prod conversations table (PostgreSQL via asyncpg), so the DDL must be
+        # portable. TIMESTAMP WITH TIME ZONE is valid PostgreSQL and accepted by
+        # SQLite (NUMERIC affinity, stores the ISO string), matching the model's
+        # DateTime(timezone=True); nullable, so no boolean-default trap applies.
+        if "finalized_at" not in conv_cols:
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE conversations ADD COLUMN finalized_at "
+                    "TIMESTAMP WITH TIME ZONE"
+                )
+            )

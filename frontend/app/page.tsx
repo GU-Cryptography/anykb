@@ -32,6 +32,7 @@ import {
   appendUserMessage,
   createConversation,
   deleteConversation,
+  finalizeConversation,
   getConversation,
   listConversations,
   migrateFromLocalStorage,
@@ -103,6 +104,7 @@ function summaryToConv(s: ConversationSummary, messages: Message[] = []): Conver
     messages,
     kb_id: s.kb_id,
     llm_model: s.llm_model,
+    finalized_at: s.finalized_at,
     created_at: createdMs,
     updated_at: updatedMs,
   };
@@ -334,6 +336,7 @@ export default function Page() {
             message_count: 0,
             created_at: created.created_at,
             updated_at: created.updated_at,
+            finalized_at: created.finalized_at,
           };
           setSummaries((prev) => [summary, ...prev]);
           setCurrentId(created.id);
@@ -598,6 +601,7 @@ export default function Page() {
         message_count: 0,
         created_at: created.created_at,
         updated_at: created.updated_at,
+        finalized_at: created.finalized_at,
       };
       setSummaries((prev) => [summary, ...prev]);
       setCurrentId(created.id);
@@ -696,6 +700,33 @@ export default function Page() {
     []
   );
 
+  // v3-M4: end a conversation → extract long-term memories (PRD §8).
+  const handleFinalize = useCallback(
+    async (id: string) => {
+      try {
+        const res = await finalizeConversation(id);
+        // Reflect finalize state so the sidebar disables the action.
+        setSummaries((prev) =>
+          prev.map((c) =>
+            c.id === id
+              ? { ...c, finalized_at: c.finalized_at ?? new Date().toISOString() }
+              : c
+          )
+        );
+        if (res.already_finalized) {
+          toast.info("该会话已结束");
+        } else if (res.memory_extracted > 0) {
+          toast.success(`已结束会话，提取了 ${res.memory_extracted} 条记忆`);
+        } else {
+          toast.success("已结束会话");
+        }
+      } catch (e) {
+        toast.error((e as Error)?.message ?? "结束会话失败");
+      }
+    },
+    []
+  );
+
   const handleLogout = useCallback(() => {
     cleanupRef.current?.();
     logout();
@@ -731,6 +762,7 @@ export default function Page() {
         onNew={handleNew}
         onDelete={handleDelete}
         onRename={handleRename}
+        onFinalize={handleFinalize}
         open={sidebarOpen}
         onToggle={() => setSidebarOpen((v) => !v)}
         user={user}

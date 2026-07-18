@@ -26,6 +26,9 @@ export type ConversationSummary = {
   message_count: number;
   created_at: string | null;
   updated_at: string | null;
+  /** v3-M4: set once the conversation is finalized (long-term memory extracted).
+   *  null = still open. Lets the sidebar hide/disable the finalize action. */
+  finalized_at: string | null;
 };
 
 export type MessagePayload = {
@@ -118,6 +121,31 @@ export async function patchConversation(
 
 export async function deleteConversation(id: string): Promise<void> {
   await unwrap(await authFetch(`/api/conversations/${id}`, { method: "DELETE" }));
+}
+
+// ---------------------------------------------------------------------------
+// v3-M4: finalize → long-term memory extraction (PRD §8)
+// ---------------------------------------------------------------------------
+export type FinalizeResult = {
+  /** Number of long-term memories extracted + stored from this conversation. */
+  memory_extracted: number;
+  /** True iff at least one memory was stored (the L1 profile may have shifted). */
+  profile_updated: boolean;
+  /** True when the conversation was already finalized → this call was a no-op. */
+  already_finalized: boolean;
+};
+
+/**
+ * Mark a conversation finished and extract long-term memories from it.
+ *
+ * Idempotent server-side: a second call returns already_finalized=true with
+ * memory_extracted=0. The backend awaits extraction (a user-initiated action),
+ * so the returned count is the real number stored.
+ */
+export async function finalizeConversation(id: string): Promise<FinalizeResult> {
+  return unwrap(
+    await authFetch(`/api/conversations/${id}/finalize`, { method: "POST" })
+  );
 }
 
 // ---------------------------------------------------------------------------

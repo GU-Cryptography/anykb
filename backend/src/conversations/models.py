@@ -58,6 +58,14 @@ class Conversation(Base):
     )
     context_summary: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
+    # v3-M4 memory-optimization: session-finalize timestamp. NULL = still open;
+    # POST /{id}/finalize stamps it once, then triggers long-term memory
+    # extraction (PRD §8). Non-null is the idempotency guard — a second finalize
+    # is a no-op that neither re-extracts nor overwrites this timestamp.
+    finalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False
     )
@@ -82,6 +90,9 @@ class Conversation(Base):
             "message_count": len(self.messages) if self.messages is not None else 0,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            # v3-M4: lets the sidebar reflect finalize state (hide/disable the
+            # "结束会话并提取记忆" action once a conversation is finalized).
+            "finalized_at": self.finalized_at.isoformat() if self.finalized_at else None,
         }
 
     def to_dict_with_messages(self) -> dict:

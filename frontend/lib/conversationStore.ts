@@ -37,6 +37,8 @@ export type Conversation = {
   kb_id?: string | null;
   /** v3-M6: per-conversation LLM model override. null = use user default. */
   llm_model?: string | null;
+  /** v3-M4: ISO timestamp once finalized (long-term memory extracted); null = open. */
+  finalized_at?: string | null;
   created_at: number;
   updated_at: number;
 };

@@ -15,6 +15,8 @@ import {
   ChevronUp,
   LogOut,
   Shield,
+  Brain,
+  Archive,
 } from "lucide-react";
 import Brand from "@/components/Brand";
 import SystemSettingsDialog from "@/components/SystemSettingsDialog";
@@ -30,6 +32,8 @@ type Props = {
   onDelete: (id: string) => void;
   /** v2-M7: optional inline rename. If omitted, the pencil icon is hidden. */
   onRename?: (id: string, newTitle: string) => Promise<void> | void;
+  /** v3-M4: end a conversation → extract long-term memories. If omitted, hidden. */
+  onFinalize?: (id: string) => void;
   open: boolean;
   onToggle: () => void;
   /** v3-M1: user info for bottom card + logout handler (DeepSeek-style). */
@@ -46,6 +50,7 @@ export default function Sidebar({
   onNew,
   onDelete,
   onRename,
+  onFinalize,
   open,
   onToggle,
   user,
@@ -164,6 +169,26 @@ export default function Sidebar({
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
                   )}
+                  {!isEditing && onFinalize && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!c.finalized_at) onFinalize(c.id);
+                      }}
+                      disabled={!!c.finalized_at}
+                      className={cn(
+                        "rounded p-1 transition group-hover:opacity-100",
+                        c.finalized_at
+                          ? "opacity-100 text-success/70 cursor-default"
+                          : "opacity-0 hover:bg-accent/15 hover:text-accent"
+                      )}
+                      aria-label="finalize conversation"
+                      title={c.finalized_at ? "已结束并提取记忆" : "结束会话并提取记忆"}
+                      type="button"
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   {!isEditing && (
                     <button
                       onClick={(e) => {
@@ -279,6 +304,14 @@ function UserMenu({
           >
             <BookOpen className="h-4 w-4 opacity-70" />
             我的知识库
+          </Link>
+          <Link
+            href="/memories"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-fg/90 transition hover:bg-surface-2"
+          >
+            <Brain className="h-4 w-4 opacity-70" />
+            我的记忆
           </Link>
           {user.is_admin && (
             <Link
