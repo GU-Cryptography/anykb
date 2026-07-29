@@ -728,6 +728,7 @@ sudo certbot renew
 | | `QDRANT_URL` | `http://localhost:6333` | Qdrant 时用 |
 | **Embedding** | `EMBEDDING_PROVIDER` | `openai` | 默认 fallback |
 | | `EMBEDDING_MODEL` | `text-embedding-3-small` | 同上 |
+| **Web 搜索** | `YDC_API_KEY` | (空) | You.com Search API Key。配置后 `web_search` 优先走 You.com（结果带来源链接）；留空则回退 DuckDuckGo（无需 Key），行为与此前一致。[获取 Key](https://you.com/platform/api-keys) |
 | **App DB** | `DATABASE_URL` | `sqlite+aiosqlite:///./data/app.db`（本地）/ `postgresql+asyncpg://...`（Docker） | Docker compose 自动注入 |
 | **Auth** | `JWT_SECRET` | (必填) | 32 字节随机十六进制 |
 | | `JWT_EXPIRE_MINUTES` | `10080` | 7 天 |
