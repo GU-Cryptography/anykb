@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # ===== Tools =====
     qweather_api_key: str = ""
     amap_api_key: str = ""
+    # You.com Search — web_search 的首选来源，配置后优先于 DuckDuckGo；
+    # 团队约定环境变量名固定为 YDC_API_KEY，留空则回退 DuckDuckGo（无需 Key）
+    ydc_api_key: str = ""
 
     # ===== Vector store (decoupled: factory picks impl by VECTOR_STORE) =====
     vector_store: str = "qdrant"  # qdrant | milvus | local
